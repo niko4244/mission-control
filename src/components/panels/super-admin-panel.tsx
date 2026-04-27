@@ -240,7 +240,7 @@ export function SuperAdminPanel() {
     } finally {
       setLoading(false)
     }
-  }, [currentUser?.username, isLocal])
+  }, [currentUser, isLocal])
 
   const loadJobDetail = useCallback(async (jobId: number) => {
     if (isLocal && jobId < 0) {

@@ -801,11 +801,11 @@ export function OfficePanel() {
     })
   }, [gameWorkers, movingDirectionByAgent, movingPositionByAgent])
 
+  const officePathPart = typeof window === 'undefined' ? 'server' : window.location.pathname.replace(/[^a-zA-Z0-9/_-]/g, '_')
   const officePrefsKey = useMemo(() => {
     const userPart = currentUser?.id ? `u${currentUser.id}` : `guest-${currentUser?.username || 'anon'}`
-    const pathPart = typeof window === 'undefined' ? 'server' : window.location.pathname.replace(/[^a-zA-Z0-9/_-]/g, '_')
-    return `mc-office-prefs:v1:${dashboardMode}:${userPart}:${pathPart}`
-  }, [currentUser?.id, currentUser?.username, dashboardMode])
+    return `mc-office-prefs:v1:${dashboardMode}:${userPart}:${officePathPart}`
+  }, [currentUser?.id, currentUser?.username, dashboardMode, officePathPart])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
