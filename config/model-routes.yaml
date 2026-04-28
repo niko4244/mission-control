@@ -1,0 +1,24 @@
+routes:
+  chat:
+    provider: ollama
+    model: qwen3.5:9b
+    purpose: general chat
+    fallback: anthropic_sonnet
+
+  fast:
+    provider: ollama
+    model: qwen3.5:9b
+    purpose: quick local tasks
+    fallback: null
+
+  reason:
+    provider: ollama
+    model: deepseek-r1:32b
+    purpose: math and reasoning
+    fallback: anthropic_sonnet
+
+  heavy_agentic:
+    provider: ollama
+    model: qwen3.6:35b-a3b
+    purpose: large autonomous tasks
+    fallback: anthropic_opus
