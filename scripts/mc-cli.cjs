@@ -171,7 +171,8 @@ async function runLocalBridge(scriptKey, extraArgs = []) {
     'memory:query': ['cli-memory.cjs', 'query'],
     'memory:outcome': ['cli-memory.cjs', 'outcome'],
     'memory:review':  ['cli-memory.cjs', 'review'],
-    'memory:approve': ['cli-memory.cjs', 'approve'],
+    'memory:approve':     ['cli-memory.cjs', 'approve'],
+    'memory:approve-all': ['cli-memory.cjs', 'approve-all'],
     'agents:task:create': ['cli-agents.cjs', 'task', 'create'],
     'agents:task:list': ['cli-agents.cjs', 'task', 'list'],
     'agents:task:status': ['cli-agents.cjs', 'task', 'status'],
@@ -839,6 +840,11 @@ async function run() {
     }
     if (rawArgs[1] === 'approve' && rawArgs[2]) {
       const result = await runLocalBridge('memory:approve', [rawArgs[2]]);
+      console.log(JSON.stringify(result));
+      return;
+    }
+    if (rawArgs[1] === 'approve-all') {
+      const result = await runLocalBridge('memory:approve-all', rawArgs[2] ? [rawArgs[2]] : []);
       console.log(JSON.stringify(result));
       return;
     }

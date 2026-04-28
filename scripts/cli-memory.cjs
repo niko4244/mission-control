@@ -254,6 +254,15 @@ function memoryReview(limit) {
   }
 }
 
+function memoryApproveAll(filter) {
+  try {
+    const result = memoryService.approveOutcomes(filter || null);
+    console.log(JSON.stringify({ status: 'ok', ...result }));
+  } catch (e) {
+    console.log(JSON.stringify({ status: 'error', message: e.message }));
+  }
+}
+
 function memoryApprove(id) {
   try {
     const suggestion = memoryService.getOutcomeSuggestion(Number(id));
@@ -321,6 +330,8 @@ function main() {
       process.exit(1);
     }
     memoryApprove(id);
+  } else if (command === 'approve-all') {
+    memoryApproveAll(args[1] || null);
   } else {
     console.log(JSON.stringify({ error: `Unknown command: ${command}` }));
     process.exit(1);

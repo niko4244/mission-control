@@ -230,4 +230,26 @@ function getOutcomeSuggestion(id) {
   return { id: row.id, suggested_outcome: match[1] };
 }
 
-module.exports = { writeMemory, queryMemory, memoryStatus, recallMemory, markOutcome, buildContext, buildExecutionPrompt, classifyOutcome, getPendingOutcomes, getOutcomeSuggestion };
+function approveOutcomes(filter = null) {
+  const valid = ['success', 'failure', 'unknown'];
+  if (filter !== null && !valid.includes(filter))
+    throw new Error(`Invalid filter: ${filter}. Must be success | failure | unknown`);
+
+  const pending = getPendingOutcomes(1000);
+  const targets = filter ? pending.filter(e => e.suggested_outcome === filter) : pending;
+
+  const breakdown = {};
+  let applied = 0;
+
+  for (const entry of targets) {
+    try {
+      markOutcome(entry.id, entry.suggested_outcome);
+      breakdown[entry.suggested_outcome] = (breakdown[entry.suggested_outcome] || 0) + 1;
+      applied++;
+    } catch {}
+  }
+
+  return { total_processed: targets.length, total_applied: applied, breakdown };
+}
+
+module.exports = { writeMemory, queryMemory, memoryStatus, recallMemory, markOutcome, buildContext, buildExecutionPrompt, classifyOutcome, getPendingOutcomes, getOutcomeSuggestion, approveOutcomes };
