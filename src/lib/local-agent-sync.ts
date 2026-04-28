@@ -15,6 +15,7 @@ import { createHash } from 'node:crypto'
 import { readdirSync, readFileSync, statSync, existsSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
+import { enrichConfigWithCommunication, inferCommunicationFallback } from './agent-communication'
 import { getDatabase, logAuditEvent } from './db'
 import { logger } from './logger'
 
@@ -97,6 +98,117 @@ function extractRole(content: string): string {
   return 'agent'
 }
 
+function inferAgentProfile(name: string, role: string, soulContent: string | null): {
+  workloadLanes: string[]
+  functions: string[]
+  skills: string[]
+  abilities: string[]
+  capabilities: string[]
+  communication: ReturnType<typeof inferCommunicationFallback>
+} {
+  const text = `${name} ${role} ${soulContent || ''}`.toLowerCase()
+  const addIf = (condition: boolean, values: string[], target: Set<string>) => {
+    if (condition) values.forEach(v => target.add(v))
+  }
+
+  const workloadLanes = new Set<string>()
+  const functions = new Set<string>()
+  const skills = new Set<string>()
+  const abilities = new Set<string>()
+  const capabilities = new Set<string>()
+
+  const isCoding = /(code|coder|developer|engineer|test|qa|deploy|devops|security)/.test(text)
+  const isResearch = /(research|explorer|analyst|review|audit|compare|lookup)/.test(text)
+  const isProduct = /(strategist|product|mvp|spec|roadmap|go-to-market|gtm|concept)/.test(text)
+  const isVisual = /(visual|image|art|prompt|design|content creator)/.test(text)
+  const isOrchestrator = /(orchestrator|router|coordinator|operator|manager)/.test(text)
+
+  addIf(isCoding, ['coding'], workloadLanes)
+  addIf(isResearch, ['lookup', 'research'], workloadLanes)
+  addIf(isProduct, ['product_conception'], workloadLanes)
+  addIf(isVisual, ['image_prompting'], workloadLanes)
+  addIf(isOrchestrator, ['tool_routing'], workloadLanes)
+
+  addIf(isCoding, ['code_execution', 'implementation_planning'], functions)
+  addIf(isResearch, ['search', 'research_synthesis'], functions)
+  addIf(isProduct, ['product_framing'], functions)
+  addIf(isVisual, ['image_direction'], functions)
+  addIf(isOrchestrator, ['tool_routing'], functions)
+
+  addIf(isCoding, ['debugging', 'implementation_planning', 'testing'], skills)
+  addIf(isResearch, ['source_grounded_synthesis', 'tradeoff_analysis'], skills)
+  addIf(isProduct, ['product_taste', 'feature_structuring'], skills)
+  addIf(isVisual, ['visual_direction', 'prompt_iteration'], skills)
+  addIf(isOrchestrator, ['task_decomposition', 'routing'], skills)
+
+  addIf(isCoding, ['code_tool_use'], abilities)
+  addIf(isResearch, ['freshness_awareness'], abilities)
+  addIf(isProduct, ['recommendation_under_uncertainty'], abilities)
+  addIf(isVisual, ['image_handoff'], abilities)
+  addIf(isOrchestrator, ['tool_selection'], abilities)
+  abilities.add('grounded_uncertainty')
+  abilities.add('concise_reasoning')
+
+  addIf(isCoding, ['coding', 'debugging', 'tests'], capabilities)
+  addIf(isResearch, ['lookup', 'research', 'comparison'], capabilities)
+  addIf(isProduct, ['product', 'feature_spec', 'mvp'], capabilities)
+  addIf(isVisual, ['image_prompting', 'art_direction', 'visual_taste'], capabilities)
+  addIf(isOrchestrator, ['tool_routing', 'coordination'], capabilities)
+  if (isOrchestrator || isCoding || isResearch || isProduct || isVisual) {
+    capabilities.add('agent_communication')
+  }
+
+  return {
+    workloadLanes: Array.from(workloadLanes),
+    functions: Array.from(functions),
+    skills: Array.from(skills),
+    abilities: Array.from(abilities),
+    capabilities: Array.from(capabilities),
+    communication: inferCommunicationFallback(name, role, soulContent),
+  }
+}
+
+function mergeConfigContent(
+  name: string,
+  role: string,
+  soulContent: string | null,
+  existingConfigContent: string | null,
+): string | null {
+  let configObj: Record<string, unknown> = {}
+  if (existingConfigContent) {
+    try {
+      const parsed = JSON.parse(existingConfigContent)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        configObj = parsed as Record<string, unknown>
+      }
+    } catch {
+      return existingConfigContent
+    }
+  }
+
+  const inferred = inferAgentProfile(name, role, soulContent)
+  const inferredLists = {
+    workloadLanes: inferred.workloadLanes,
+    functions: inferred.functions,
+    skills: inferred.skills,
+    abilities: inferred.abilities,
+    capabilities: inferred.capabilities,
+  }
+
+  for (const [key, values] of Object.entries(inferredLists)) {
+    const existing = Array.isArray(configObj[key]) ? configObj[key] as unknown[] : []
+    const merged = Array.from(new Set([
+      ...existing.filter((v): v is string => typeof v === 'string'),
+      ...values,
+    ]))
+    if (merged.length > 0) {
+      configObj[key] = merged
+    }
+  }
+
+  return JSON.stringify(enrichConfigWithCommunication(configObj, inferred.communication))
+}
+
 function getLocalAgentRoots(): string[] {
   const home = homedir()
   return [
@@ -157,7 +269,7 @@ function scanLocalAgents(): DiskAgent[] {
             dir: fullPath,
             role: frontmatter.description ? 'agent' : 'agent',
             soulContent: body.trim() || null,
-            configContent: configJson,
+            configContent: mergeConfigContent(agentName, 'agent', body.trim() || null, configJson),
             contentHash: sha256(content),
           })
         } catch { /* unreadable */ }
@@ -209,7 +321,7 @@ function scanLocalAgents(): DiskAgent[] {
         dir: fullPath,
         role,
         soulContent,
-        configContent,
+        configContent: mergeConfigContent(entry, role, soulContent, configContent),
         contentHash: sha256(hashInput),
       })
     }

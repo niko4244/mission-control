@@ -8,6 +8,7 @@ import { logger } from '@/lib/logger'
 import { scanForInjection, sanitizeForPrompt } from '@/lib/injection-guard'
 import { callOpenClawGateway } from '@/lib/openclaw-gateway'
 import { resolveCoordinatorDeliveryTarget } from '@/lib/coordinator-routing'
+import { canAgentsCommunicate, isAgentToAgentRequest } from '@/lib/agent-communication'
 
 type ForwardInfo = {
   attempted: boolean
@@ -335,14 +336,61 @@ export async function POST(request: NextRequest) {
 
     const requestedFrom = typeof body.from === 'string' ? body.from.trim() : ''
     const isCoordinatorOverride = requestedFrom.toLowerCase() === COORDINATOR_AGENT.toLowerCase()
-    const from = isCoordinatorOverride
-      ? COORDINATOR_AGENT
-      : (auth.user.display_name || auth.user.username || 'system')
     const to = body.to ? (body.to as string).trim() : null
     const content = (body.content || '').trim()
     const message_type = body.message_type || 'text'
-    const conversation_id = body.conversation_id || `conv_${Date.now()}`
-    const metadata = body.metadata || null
+    const metadata =
+      body.metadata && typeof body.metadata === 'object' && !Array.isArray(body.metadata)
+        ? { ...(body.metadata as Record<string, unknown>) }
+        : null
+
+    const senderAgent = requestedFrom
+      ? (db
+          .prepare('SELECT * FROM agents WHERE lower(name) = lower(?) AND workspace_id = ?')
+          .get(requestedFrom, workspaceId) as any)
+      : null
+    const recipientAgent = to
+      ? (db
+          .prepare('SELECT * FROM agents WHERE lower(name) = lower(?) AND workspace_id = ?')
+          .get(to, workspaceId) as any)
+      : null
+
+    const isAgentToAgent = isAgentToAgentRequest({
+      requestedFrom,
+      conversationId: typeof body.conversation_id === 'string' ? body.conversation_id : null,
+      metadata,
+      senderExists: Boolean(senderAgent),
+      recipientExists: Boolean(recipientAgent),
+    })
+
+    const from = isCoordinatorOverride
+      ? COORDINATOR_AGENT
+      : isAgentToAgent && senderAgent
+        ? String(senderAgent.name || requestedFrom)
+        : (auth.user.display_name || auth.user.username || 'system')
+
+    if (isAgentToAgent && senderAgent && recipientAgent) {
+      const permission = canAgentsCommunicate(senderAgent, recipientAgent)
+      if (!permission.allowed) {
+        return NextResponse.json(
+          { error: `Agent-to-agent delivery blocked: ${permission.reason || 'not_allowed'}` },
+          { status: 403 },
+        )
+      }
+    }
+
+    const conversation_id = body.conversation_id || (
+      isAgentToAgent && recipientAgent
+        ? `a2a:${from}:${recipientAgent.name}`
+        : `conv_${Date.now()}`
+    )
+    const persistedMetadata = isAgentToAgent
+      ? {
+          ...(metadata || {}),
+          channel: 'agent-to-agent',
+          agent_to_agent: true,
+        }
+      : metadata
 
     if (!content) {
       return NextResponse.json(
@@ -377,7 +425,7 @@ export async function POST(request: NextRequest) {
       to,
       content,
       message_type,
-      metadata ? JSON.stringify(metadata) : null,
+      persistedMetadata ? JSON.stringify(persistedMetadata) : null,
       workspaceId
     )
 
@@ -412,9 +460,7 @@ export async function POST(request: NextRequest) {
       if (body.forward) {
         forwardInfo = { attempted: true, delivered: false }
 
-        const agent = db
-          .prepare('SELECT * FROM agents WHERE lower(name) = lower(?) AND workspace_id = ?')
-          .get(to, workspaceId) as any
+        const agent = recipientAgent
 
         const explicitSessionKey = typeof body.sessionKey === 'string' && body.sessionKey
           ? body.sessionKey

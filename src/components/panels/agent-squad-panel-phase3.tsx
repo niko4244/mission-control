@@ -13,6 +13,8 @@ import {
   MemoryTab,
   TasksTab,
   ActivityTab,
+  CommunicationTab,
+  DailyLogTab,
   ConfigTab,
   FilesTab,
   ToolsTab,
@@ -595,7 +597,7 @@ function AgentDetailModalPhase3({
   onDelete: (agentId: number, removeWorkspace: boolean) => Promise<void>
 }) {
   const [agentState, setAgentState] = useState<Agent & { config?: any; working_memory?: string }>(agent as Agent & { config?: any; working_memory?: string })
-  const [activeTab, setActiveTab] = useState<'overview' | 'soul' | 'memory' | 'config' | 'tasks' | 'activity' | 'files' | 'tools' | 'channels' | 'cron' | 'models'>('overview')
+  const [activeTab, setActiveTab] = useState<'overview' | 'soul' | 'memory' | 'config' | 'communication' | 'daily-log' | 'tasks' | 'activity' | 'files' | 'tools' | 'channels' | 'cron' | 'models'>('overview')
   const [editing, setEditing] = useState(false)
   const [formData, setFormData] = useState({
     role: agent.role,
@@ -831,6 +833,8 @@ function AgentDetailModalPhase3({
     { id: 'memory', label: 'Memory', icon: 'M' },
     { id: 'tasks', label: 'Tasks', icon: 'T' },
     { id: 'config', label: 'Config', icon: 'C' },
+    { id: 'communication', label: 'Communication', icon: 'P' },
+    { id: 'daily-log', label: 'Daily Log', icon: 'D' },
     { id: 'activity', label: 'Activity', icon: 'A' }
   ]
 
@@ -1017,6 +1021,14 @@ function AgentDetailModalPhase3({
               onSaveWorkspaceFile={handleWorkspaceFileSave}
               onSave={onUpdate}
             />
+          )}
+
+          {activeTab === 'communication' && (
+            <CommunicationTab agent={agentState} />
+          )}
+
+          {activeTab === 'daily-log' && (
+            <DailyLogTab agent={agentState} />
           )}
 
           {activeTab === 'files' && (

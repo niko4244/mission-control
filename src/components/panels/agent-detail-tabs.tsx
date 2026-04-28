@@ -1,10 +1,12 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Loader } from '@/components/ui/loader'
 import { createClientLogger } from '@/lib/client-logger'
+import { canAgentsCommunicate, getAgentCommunicationConfig } from '@/lib/agent-communication'
+import { buildAgentDailyLogEntries, buildStableAgentThreadId } from '@/lib/agent-daily-log'
 import Link from 'next/link'
 
 const log = createClientLogger('AgentDetailTabs')
@@ -21,12 +23,32 @@ interface Agent {
   last_activity?: string
   created_at: number
   updated_at: number
+  config?: any
   taskStats?: {
     total: number
     assigned: number
     in_progress: number
     completed: number
   }
+}
+
+interface AgentCommsMessage {
+  id: number
+  conversation_id: string
+  from_agent: string
+  to_agent?: string
+  content: string
+  message_type: string
+  metadata?: any
+  created_at: number
+}
+
+interface ActivityItem {
+  id: number
+  type: string
+  description: string
+  created_at: number
+  data?: any
 }
 
 interface WorkItem {
@@ -786,6 +808,506 @@ export function ActivityTab({ agent }: { agent: Agent }) {
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+export function CommunicationTab({ agent }: { agent: Agent }) {
+  const [agents, setAgents] = useState<Agent[]>([])
+  const [messages, setMessages] = useState<AgentCommsMessage[]>([])
+  const [loading, setLoading] = useState(true)
+  const [sending, setSending] = useState(false)
+  const [selectedPeer, setSelectedPeer] = useState<string>('')
+  const [draft, setDraft] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [status, setStatus] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+
+    const load = async () => {
+      try {
+        setLoading(true)
+        setError(null)
+        const [agentsRes, commsRes] = await Promise.all([
+          fetch('/api/agents?limit=200&show_hidden=true'),
+          fetch(`/api/agents/comms?agent=${encodeURIComponent(agent.name)}&limit=100`),
+        ])
+
+        if (!agentsRes.ok || !commsRes.ok) {
+          throw new Error('Failed to load communication data')
+        }
+
+        const [agentsPayload, commsPayload] = await Promise.all([agentsRes.json(), commsRes.json()])
+        if (cancelled) return
+        setAgents(agentsPayload.agents || [])
+        setMessages(commsPayload.messages || [])
+      } catch (loadError: any) {
+        if (!cancelled) setError(loadError?.message || 'Failed to load communication data')
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+
+    load()
+    return () => { cancelled = true }
+  }, [agent.name])
+
+  const communication = getAgentCommunicationConfig(agent.config)
+  const allowedPeers = useMemo(() => {
+    return agents
+      .filter((candidate) => candidate.name !== agent.name)
+      .filter((candidate) => canAgentsCommunicate(agent, candidate).allowed)
+      .sort((left, right) => {
+        const leftPreferred = communication.preferredAgents?.includes(left.name) ? 1 : 0
+        const rightPreferred = communication.preferredAgents?.includes(right.name) ? 1 : 0
+        if (leftPreferred !== rightPreferred) return rightPreferred - leftPreferred
+        return left.name.localeCompare(right.name)
+      })
+  }, [agent, agents, communication.preferredAgents])
+
+  useEffect(() => {
+    if (!selectedPeer && allowedPeers.length > 0) {
+      setSelectedPeer(allowedPeers[0].name)
+    }
+  }, [allowedPeers, selectedPeer])
+
+  const selectedPeerAgent = allowedPeers.find((candidate) => candidate.name === selectedPeer) || null
+  const activeConversationId = selectedPeerAgent ? buildStableAgentThreadId(agent.name, selectedPeerAgent.name) : null
+  const threadMessages = useMemo(() => {
+    if (!activeConversationId) return []
+    return messages
+      .filter((message) =>
+        message.conversation_id === activeConversationId ||
+        (
+          [message.from_agent, message.to_agent].includes(agent.name) &&
+          [message.from_agent, message.to_agent].includes(selectedPeerAgent?.name || '')
+        ),
+      )
+      .sort((left, right) => left.created_at - right.created_at)
+  }, [activeConversationId, agent.name, messages, selectedPeerAgent?.name])
+
+  const handleSend = async () => {
+    if (!selectedPeerAgent || !draft.trim() || sending) return
+    setSending(true)
+    setError(null)
+    setStatus(null)
+    try {
+      const response = await fetch('/api/chat/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          from: agent.name,
+          to: selectedPeerAgent.name,
+          content: draft.trim(),
+          message_type: 'text',
+          conversation_id: buildStableAgentThreadId(agent.name, selectedPeerAgent.name),
+          metadata: { channel: 'agent-to-agent', as_agent: true },
+          forward: true,
+        }),
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(payload?.error || 'Failed to send message')
+      }
+      setDraft('')
+      setStatus(`Direct thread updated with ${selectedPeerAgent.name}.`)
+      setMessages((prev) => [...prev, payload.message].filter(Boolean))
+    } catch (sendError: any) {
+      setError(sendError?.message || 'Failed to send message')
+    } finally {
+      setSending(false)
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="p-6 flex items-center justify-center py-8">
+        <Loader variant="inline" label="Loading communication" />
+      </div>
+    )
+  }
+
+  return (
+    <div className="p-6 space-y-4">
+      <div className="grid lg:grid-cols-[280px_1fr] gap-4">
+        <div className="space-y-4">
+          <div className="bg-surface-1/50 rounded-lg p-4">
+            <h4 className="text-lg font-medium text-foreground">Communication</h4>
+            <div className="mt-3 space-y-2 text-xs">
+              <div className="flex justify-between gap-3">
+                <span className="text-muted-foreground">Mode</span>
+                <span className="text-foreground">{communication.mode || 'isolated'}</span>
+              </div>
+              <div className="flex justify-between gap-3">
+                <span className="text-muted-foreground">Direct send</span>
+                <span className="text-foreground">{communication.canInitiateDirect ? 'enabled' : 'disabled'}</span>
+              </div>
+              <div className="flex justify-between gap-3">
+                <span className="text-muted-foreground">Direct receive</span>
+                <span className="text-foreground">{communication.canReceiveDirect ? 'enabled' : 'disabled'}</span>
+              </div>
+            </div>
+            {communication.allowedRoles && communication.allowedRoles.length > 0 && (
+              <div className="mt-3">
+                <div className="text-xs text-muted-foreground mb-1">Allowed roles</div>
+                <div className="flex flex-wrap gap-1">
+                  {communication.allowedRoles.map((role: string) => (
+                    <span key={role} className="px-2 py-0.5 text-xs bg-cyan-500/10 text-cyan-300 rounded border border-cyan-500/20">
+                      {role}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="bg-surface-1/50 rounded-lg p-4">
+            <div className="flex items-center justify-between gap-2">
+              <h5 className="text-sm font-medium text-foreground">Allowed peers</h5>
+              <span className="text-xs text-muted-foreground">{allowedPeers.length}</span>
+            </div>
+            {allowedPeers.length === 0 ? (
+              <p className="text-xs text-muted-foreground mt-3">
+                No peers are currently approved for direct agent threads.
+              </p>
+            ) : (
+              <div className="mt-3 space-y-2">
+                {allowedPeers.map((peer) => {
+                  const isSelected = selectedPeer === peer.name
+                  return (
+                    <button
+                      key={peer.id}
+                      type="button"
+                      onClick={() => setSelectedPeer(peer.name)}
+                      className={`w-full text-left rounded-lg border px-3 py-2 transition-colors ${
+                        isSelected
+                          ? 'border-primary/40 bg-primary/10'
+                          : 'border-border bg-card hover:border-border/80 hover:bg-surface-1'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div>
+                          <div className="text-sm text-foreground font-medium">{peer.name}</div>
+                          <div className="text-xs text-muted-foreground">{peer.role}</div>
+                        </div>
+                        <span className={`w-2 h-2 rounded-full ${peer.status === 'busy' ? 'bg-emerald-400' : peer.status === 'idle' ? 'bg-yellow-400' : peer.status === 'error' ? 'bg-rose-400' : 'bg-muted-foreground/40'}`} />
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="bg-surface-1/50 rounded-lg p-4 min-h-[420px] flex flex-col">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h5 className="text-sm font-medium text-foreground">Direct thread</h5>
+              <p className="text-xs text-muted-foreground">
+                {selectedPeerAgent
+                  ? `Intentional a2a thread between ${agent.name} and ${selectedPeerAgent.name}.`
+                  : 'Select an allowed peer to open a direct thread.'}
+              </p>
+            </div>
+            {activeConversationId && (
+              <span className="text-[11px] text-muted-foreground font-mono">{activeConversationId}</span>
+            )}
+          </div>
+
+          {error && (
+            <div className="mt-3 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 text-xs text-red-300">
+              {error}
+            </div>
+          )}
+
+          {status && (
+            <div className="mt-3 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2 text-xs text-emerald-300">
+              {status}
+            </div>
+          )}
+
+          <div className="mt-4 flex-1 overflow-y-auto space-y-2">
+            {!selectedPeerAgent ? (
+              <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
+                Choose a peer on the left to start a direct collaboration thread.
+              </div>
+            ) : threadMessages.length === 0 ? (
+              <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
+                No direct messages yet. Use the composer below to intentionally open the thread.
+              </div>
+            ) : (
+              threadMessages.map((message) => {
+                const outgoing = message.from_agent === agent.name
+                return (
+                  <div
+                    key={message.id}
+                    className={`rounded-lg px-3 py-2 border ${
+                      outgoing
+                        ? 'bg-primary/10 border-primary/20 ml-8'
+                        : 'bg-card border-border mr-8'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-medium text-foreground">{message.from_agent}</span>
+                      <span className="text-[11px] text-muted-foreground">
+                        {new Date(message.created_at * 1000).toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="text-sm text-foreground/90 mt-1 whitespace-pre-wrap">{message.content}</div>
+                  </div>
+                )
+              })
+            )}
+          </div>
+
+          <div className="mt-4 border-t border-border/50 pt-4">
+            <label className="block text-xs text-muted-foreground mb-2">Message as {agent.name}</label>
+            <textarea
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault()
+                  void handleSend()
+                }
+              }}
+              rows={3}
+              placeholder={selectedPeerAgent ? `Message ${selectedPeerAgent.name} directly...` : 'Select a peer first'}
+              className="w-full bg-card border border-border/50 rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-primary/50"
+              disabled={!selectedPeerAgent || sending}
+            />
+            <div className="flex justify-end mt-2">
+              <Button onClick={() => void handleSend()} disabled={!selectedPeerAgent || !draft.trim() || sending} size="sm">
+                {sending ? 'Sending...' : 'Open direct thread'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export function DailyLogTab({ agent }: { agent: Agent }) {
+  const [activities, setActivities] = useState<ActivityItem[]>([])
+  const [messages, setMessages] = useState<AgentCommsMessage[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+
+    const load = async () => {
+      try {
+        setLoading(true)
+        setError(null)
+        const [activitiesRes, commsRes] = await Promise.all([
+          fetch(`/api/activities?actor=${encodeURIComponent(agent.name)}&limit=200`),
+          fetch(`/api/agents/comms?agent=${encodeURIComponent(agent.name)}&limit=200`),
+        ])
+        if (!activitiesRes.ok || !commsRes.ok) {
+          throw new Error('Failed to load daily log')
+        }
+        const [activitiesPayload, commsPayload] = await Promise.all([activitiesRes.json(), commsRes.json()])
+        if (cancelled) return
+        setActivities(activitiesPayload.activities || [])
+        setMessages(commsPayload.messages || [])
+      } catch (loadError: any) {
+        if (!cancelled) setError(loadError?.message || 'Failed to load daily log')
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+
+    load()
+    return () => { cancelled = true }
+  }, [agent.name])
+
+  const entries = useMemo(() => buildAgentDailyLogEntries(agent.name, activities, messages), [agent.name, activities, messages])
+
+  if (loading) {
+    return (
+      <div className="p-6 flex items-center justify-center py-8">
+        <Loader variant="inline" label="Loading daily log" />
+      </div>
+    )
+  }
+
+  return (
+    <div className="p-6 space-y-4">
+      <div>
+        <h4 className="text-lg font-medium text-foreground">Daily log</h4>
+        <p className="text-sm text-muted-foreground mt-1">
+          A day-by-day view of what {agent.name} worked on, who it collaborated with, and what it learned.
+        </p>
+      </div>
+
+      {error && (
+        <div className="bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 text-xs text-red-300">
+          {error}
+        </div>
+      )}
+
+      {entries.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-10 text-muted-foreground/60">
+          <p className="text-sm">No daily log entries yet for this agent.</p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {entries.map((entry) => (
+            <div key={entry.dayKey} className="rounded-lg border border-border bg-surface-1/40 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="text-sm font-medium text-foreground">{entry.label}</div>
+                  <div className="text-xs text-muted-foreground">{entry.dayKey}</div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <span className="px-2 py-0.5 text-xs rounded bg-blue-500/10 text-blue-300 border border-blue-500/20">
+                    {entry.activityCount} actions
+                  </span>
+                  <span className="px-2 py-0.5 text-xs rounded bg-cyan-500/10 text-cyan-300 border border-cyan-500/20">
+                    {entry.communicationCount} messages
+                  </span>
+                  <span className="px-2 py-0.5 text-xs rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">
+                    {entry.learningCount} learning updates
+                  </span>
+                  <span className="px-2 py-0.5 text-xs rounded bg-amber-500/10 text-amber-300 border border-amber-500/20">
+                    {entry.toolCallCount} tool calls
+                  </span>
+                </div>
+              </div>
+
+              {entry.peers.length > 0 && (
+                <div className="mt-4">
+                  <div className="text-xs text-muted-foreground mb-1">Collaborated with</div>
+                  <div className="flex flex-wrap gap-1">
+                    {entry.peers.map((peer) => (
+                      <span key={peer} className="px-2 py-0.5 text-xs rounded bg-primary/10 text-primary border border-primary/20">
+                        {peer}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {entry.actions.length > 0 && (
+                <div className="mt-4">
+                  <div className="text-xs text-muted-foreground mb-1">What it did</div>
+                  <div className="space-y-1">
+                    {entry.actions.map((action) => (
+                      <div key={action} className="text-sm text-foreground/90">
+                        • {action}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {entry.learned.length > 0 && (
+                <div className="mt-4">
+                  <div className="text-xs text-muted-foreground mb-1">What it learned</div>
+                  <div className="space-y-1">
+                    {entry.learned.map((item) => (
+                      <div key={item} className="text-sm text-emerald-200/90">
+                        • {item}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function StaticStringList({
+  label,
+  values,
+  accentClass,
+}: {
+  label: string
+  values: string[]
+  accentClass: string
+}) {
+  return (
+    <div>
+      <div className="text-xs text-muted-foreground mb-1">{label}</div>
+      {values.length > 0 ? (
+        <div className="flex flex-wrap gap-1">
+          {values.map((value) => (
+            <span key={value} className={`px-2 py-0.5 text-xs rounded border ${accentClass}`}>
+              {value}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <div className="text-xs text-muted-foreground">None configured</div>
+      )}
+    </div>
+  )
+}
+
+function EditableStringList({
+  label,
+  values,
+  onChange,
+  placeholder,
+  accentClass,
+}: {
+  label: string
+  values: string[]
+  onChange: (values: string[]) => void
+  placeholder: string
+  accentClass: string
+}) {
+  const [draft, setDraft] = useState('')
+
+  const addValue = () => {
+    const trimmed = draft.trim()
+    if (!trimmed || values.includes(trimmed)) return
+    onChange([...values, trimmed])
+    setDraft('')
+  }
+
+  return (
+    <div>
+      <div className="text-xs text-muted-foreground mb-1">{label}</div>
+      <div className="flex flex-wrap gap-1 mb-2">
+        {values.map((value) => (
+          <span key={value} className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded border ${accentClass}`}>
+            {value}
+            <button
+              type="button"
+              onClick={() => onChange(values.filter((entry) => entry !== value))}
+              className="opacity-70 hover:opacity-100"
+            >
+              x
+            </button>
+          </span>
+        ))}
+      </div>
+      <div className="flex gap-2">
+        <input
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault()
+              addValue()
+            }
+          }}
+          placeholder={placeholder}
+          className="flex-1 px-2 py-1 text-xs border border-border rounded bg-background text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+        />
+        <Button type="button" size="xs" variant="secondary" onClick={addValue}>
+          Add
+        </Button>
+      </div>
     </div>
   )
 }
@@ -1561,6 +2083,7 @@ export function ConfigTab({
   const sandbox = config.sandbox || {}
   const tools = config.tools || {}
   const subagents = config.subagents || {}
+  const communication = config.communication || {}
   const memorySearch = config.memorySearch || {}
   const sandboxMode = sandbox.mode || sandbox.sandboxMode || sandbox.sandbox_mode || config.sandboxMode || 'not configured'
   const sandboxWorkspace = sandbox.workspaceAccess || sandbox.workspace_access || sandbox.workspace || config.workspaceAccess || 'not configured'
@@ -2108,6 +2631,124 @@ export function ConfigTab({
                   <div className="text-xs text-muted-foreground">{t('noSubAgentsConfigured')}</div>
                 )}
               </>
+            )}
+          </div>
+
+          {/* Communication */}
+          <div className="bg-surface-1/50 rounded-lg p-4">
+            <h5 className="text-sm font-medium text-foreground mb-2">Communication</h5>
+            {editing ? (
+              <div className="space-y-3">
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-xs text-muted-foreground mb-1">Mode</label>
+                    <select
+                      value={communication.mode || ''}
+                      onChange={(e) => {
+                        setConfig((prev: any) => ({
+                          ...prev,
+                          communication: { ...(prev.communication || {}), mode: e.target.value || undefined },
+                        }))
+                      }}
+                      className="w-full mt-1 px-2 py-1 text-xs border border-border rounded bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+                    >
+                      <option value="">inherit</option>
+                      <option value="isolated">isolated</option>
+                      <option value="direct">direct</option>
+                      <option value="hybrid">hybrid</option>
+                      <option value="coordinator">coordinator</option>
+                    </select>
+                  </div>
+                  <label className="flex items-center gap-2 text-xs text-foreground mt-5">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(communication.canInitiateDirect)}
+                      onChange={(e) => {
+                        setConfig((prev: any) => ({
+                          ...prev,
+                          communication: { ...(prev.communication || {}), canInitiateDirect: e.target.checked },
+                        }))
+                      }}
+                    />
+                    Can initiate direct
+                  </label>
+                  <label className="flex items-center gap-2 text-xs text-foreground mt-5">
+                    <input
+                      type="checkbox"
+                      checked={communication.canReceiveDirect !== false}
+                      onChange={(e) => {
+                        setConfig((prev: any) => ({
+                          ...prev,
+                          communication: { ...(prev.communication || {}), canReceiveDirect: e.target.checked },
+                        }))
+                      }}
+                    />
+                    Can receive direct
+                  </label>
+                </div>
+
+                <EditableStringList
+                  label="Allowed agents"
+                  values={Array.isArray(communication.allowedAgents) ? communication.allowedAgents : []}
+                  onChange={(values) => {
+                    setConfig((prev: any) => ({
+                      ...prev,
+                      communication: { ...(prev.communication || {}), allowedAgents: values },
+                    }))
+                  }}
+                  placeholder="Add allowed agent"
+                  accentClass="bg-primary/10 text-primary border-primary/20"
+                />
+
+                <EditableStringList
+                  label="Allowed roles"
+                  values={Array.isArray(communication.allowedRoles) ? communication.allowedRoles : []}
+                  onChange={(values) => {
+                    setConfig((prev: any) => ({
+                      ...prev,
+                      communication: { ...(prev.communication || {}), allowedRoles: values },
+                    }))
+                  }}
+                  placeholder="Add allowed role"
+                  accentClass="bg-cyan-500/10 text-cyan-300 border-cyan-500/20"
+                />
+
+                <EditableStringList
+                  label="Preferred peers"
+                  values={Array.isArray(communication.preferredAgents) ? communication.preferredAgents : []}
+                  onChange={(values) => {
+                    setConfig((prev: any) => ({
+                      ...prev,
+                      communication: { ...(prev.communication || {}), preferredAgents: values },
+                    }))
+                  }}
+                  placeholder="Add preferred peer"
+                  accentClass="bg-emerald-500/10 text-emerald-300 border-emerald-500/20"
+                />
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="grid grid-cols-3 gap-2 text-sm">
+                  <div><span className="text-muted-foreground">Mode:</span> <span className="text-foreground">{communication.mode || 'inherit'}</span></div>
+                  <div><span className="text-muted-foreground">Initiate:</span> <span className="text-foreground">{communication.canInitiateDirect ? 'enabled' : 'disabled'}</span></div>
+                  <div><span className="text-muted-foreground">Receive:</span> <span className="text-foreground">{communication.canReceiveDirect !== false ? 'enabled' : 'disabled'}</span></div>
+                </div>
+                <StaticStringList
+                  label="Allowed agents"
+                  values={Array.isArray(communication.allowedAgents) ? communication.allowedAgents : []}
+                  accentClass="bg-primary/10 text-primary border-primary/20"
+                />
+                <StaticStringList
+                  label="Allowed roles"
+                  values={Array.isArray(communication.allowedRoles) ? communication.allowedRoles : []}
+                  accentClass="bg-cyan-500/10 text-cyan-300 border-cyan-500/20"
+                />
+                <StaticStringList
+                  label="Preferred peers"
+                  values={Array.isArray(communication.preferredAgents) ? communication.preferredAgents : []}
+                  accentClass="bg-emerald-500/10 text-emerald-300 border-emerald-500/20"
+                />
+              </div>
             )}
           </div>
 

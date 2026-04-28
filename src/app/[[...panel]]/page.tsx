@@ -39,6 +39,7 @@ import { ExecApprovalPanel } from '@/components/panels/exec-approval-panel'
 import { SystemMonitorPanel } from '@/components/panels/system-monitor-panel'
 import { ChatPagePanel } from '@/components/panels/chat-page-panel'
 import { ChatPanel } from '@/components/chat/chat-panel'
+import { AmbientCompanion } from '@/components/chat/ambient-companion'
 import { STORAGE_GATEWAY_URL } from '@/lib/device-identity'
 import { getPluginPanel } from '@/lib/plugins'
 import { shouldRedirectDashboardToHttps } from '@/lib/browser-security'
@@ -462,6 +463,9 @@ export default function Home() {
 
       {/* Chat panel overlay */}
       {!showOnboarding && <ChatPanel />}
+
+      {/* Omnipresent desktop companion */}
+      {!showOnboarding && <AmbientCompanion />}
 
       {/* Global exec approval overlay (shown regardless of active panel) */}
       {!showOnboarding && <ExecApprovalOverlay />}

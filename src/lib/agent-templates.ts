@@ -6,6 +6,9 @@
  * can be customized before creating an agent.
  */
 
+import type { AgentCommunicationConfig } from '@/lib/agent-communication'
+import { getPluginToolProviders } from '@/lib/plugins'
+
 export interface AgentToolsConfig {
   allow: string[]
   deny: string[]
@@ -54,6 +57,12 @@ export interface OpenClawAgentConfig {
   sandbox: AgentSandboxConfig
   tools: AgentToolsConfig
   memorySearch?: AgentMemorySearchConfig
+  communication?: AgentCommunicationConfig
+  workloadLanes?: string[]
+  functions?: string[]
+  skills?: string[]
+  abilities?: string[]
+  capabilities?: string[]
 }
 
 export interface AgentTemplate {
@@ -65,8 +74,6 @@ export interface AgentTemplate {
   toolCount: number
   config: Omit<OpenClawAgentConfig, 'id' | 'workspace' | 'agentDir'>
 }
-
-import { getPluginToolProviders } from '@/lib/plugins'
 
 // Tool groups for template composition
 const TOOL_GROUPS: Record<string, readonly string[]> = {
@@ -166,6 +173,17 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
         sources: ['memory', 'sessions'],
         experimental: { sessionMemory: true },
       },
+      communication: {
+        mode: 'hybrid',
+        canInitiateDirect: true,
+        canReceiveDirect: true,
+        allowedRoles: ['developer', 'builder', 'research', 'analyst', 'product', 'strategist', 'visual', 'design', 'reviewer', 'security', 'content'],
+      },
+      workloadLanes: ['tool_routing', 'lookup', 'coding', 'research', 'product_conception', 'image_prompting'],
+      functions: ['tool_routing', 'search', 'code_execution', 'research_synthesis', 'product_framing', 'image_direction'],
+      skills: ['task_decomposition', 'routing', 'recommendation', 'coordination'],
+      abilities: ['freshness_awareness', 'tool_selection', 'grounded_uncertainty'],
+      capabilities: ['lookup', 'coding', 'research', 'product_conception', 'image_prompting', 'tool_routing', 'agent_communication', 'coordination'],
     },
   },
   {
@@ -200,16 +218,27 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
           ...TOOL_GROUPS.coding,
           ...TOOL_GROUPS.browser,
           ...TOOL_GROUPS.memory,
-          'agents_list', 'sessions_spawn', 'sessions_history', 'session_status',
+          'agents_list', 'sessions_send', 'sessions_spawn', 'sessions_history', 'session_status',
           ...TOOL_GROUPS.subagent,
           ...TOOL_GROUPS.thinking,
         ],
-        deny: [...COMMON_DENY, 'sessions_send'],
+        deny: COMMON_DENY,
       },
       memorySearch: {
         sources: ['memory', 'sessions'],
         experimental: { sessionMemory: true },
       },
+      communication: {
+        mode: 'direct',
+        canInitiateDirect: true,
+        canReceiveDirect: true,
+        allowedRoles: ['orchestrator', 'coordinator', 'operator', 'developer', 'builder', 'reviewer', 'research', 'analyst'],
+      },
+      workloadLanes: ['coding', 'tool_routing'],
+      functions: ['code_execution', 'implementation_planning'],
+      skills: ['debugging', 'implementation_planning', 'testing'],
+      abilities: ['code_tool_use', 'concise_reasoning'],
+      capabilities: ['coding', 'debugging', 'implementation', 'tests', 'agent_communication'],
     },
   },
   {
@@ -242,16 +271,27 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
         allow: [
           ...TOOL_GROUPS.coding,
           ...TOOL_GROUPS.memory,
-          'agents_list', 'sessions_spawn', 'session_status',
+          'agents_list', 'sessions_send', 'sessions_spawn', 'session_status',
           'subagents', 'llm-task',
           'thinking', 'reactions', 'skills',
         ],
-        deny: [...COMMON_DENY, 'sessions_send', 'browser', 'web', 'lobster'],
+        deny: [...COMMON_DENY, 'browser', 'web', 'lobster'],
       },
       memorySearch: {
         sources: ['memory', 'sessions'],
         experimental: { sessionMemory: true },
       },
+      communication: {
+        mode: 'direct',
+        canInitiateDirect: true,
+        canReceiveDirect: true,
+        allowedRoles: ['orchestrator', 'coordinator', 'operator', 'developer', 'builder', 'reviewer'],
+      },
+      workloadLanes: ['coding'],
+      functions: ['code_execution', 'implementation_planning'],
+      skills: ['debugging', 'implementation_planning'],
+      abilities: ['code_tool_use', 'grounded_uncertainty'],
+      capabilities: ['coding', 'debugging', 'api', 'component', 'tests', 'agent_communication'],
     },
   },
   {
@@ -279,17 +319,25 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
       tools: {
         allow: [
           'read', 'memory_search', 'memory_get',
+          'sessions_send',
           'agents_list', 'thinking', 'reactions', 'skills',
         ],
         deny: [
           ...COMMON_DENY,
           'write', 'edit', 'apply_patch', 'exec', 'bash', 'process',
-          'browser', 'web', 'sessions_send', 'sessions_spawn', 'lobster',
+          'browser', 'web', 'sessions_spawn', 'lobster',
         ],
       },
       memorySearch: {
         sources: ['memory'],
       },
+      communication: {
+        mode: 'direct',
+        canInitiateDirect: true,
+        canReceiveDirect: true,
+        allowedRoles: ['orchestrator', 'coordinator', 'operator', 'developer', 'builder', 'security'],
+      },
+      capabilities: ['review', 'qa', 'agent_communication'],
     },
   },
   {
@@ -318,17 +366,28 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
         allow: [
           'browser', 'web',
           'memory_search', 'memory_get',
-          'agents_list', 'thinking', 'reactions', 'skills',
+          'agents_list', 'sessions_send', 'thinking', 'reactions', 'skills',
         ],
         deny: [
           ...COMMON_DENY,
           'read', 'write', 'edit', 'apply_patch', 'exec', 'bash', 'process',
-          'sessions_send', 'sessions_spawn', 'lobster',
+          'sessions_spawn', 'lobster',
         ],
       },
       memorySearch: {
         sources: ['memory', 'sessions'],
       },
+      communication: {
+        mode: 'direct',
+        canInitiateDirect: true,
+        canReceiveDirect: true,
+        allowedRoles: ['orchestrator', 'coordinator', 'operator', 'developer', 'builder', 'product', 'strategist'],
+      },
+      workloadLanes: ['lookup', 'research'],
+      functions: ['search', 'research_synthesis'],
+      skills: ['source_grounded_synthesis', 'tradeoff_analysis'],
+      abilities: ['freshness_awareness', 'grounded_uncertainty'],
+      capabilities: ['lookup', 'research', 'analysis', 'comparison', 'agent_communication'],
     },
   },
   {
@@ -358,19 +417,26 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
           'write', 'edit',
           'memory_search', 'memory_get',
           'agents_list',
-          'thinking', 'reactions', 'skills',
+          'sessions_send', 'thinking', 'reactions', 'skills',
           'web',
         ],
         deny: [
           ...COMMON_DENY,
           'read', 'apply_patch', 'exec', 'bash', 'process',
-          'browser', 'sessions_send', 'sessions_spawn', 'lobster',
+          'browser', 'sessions_spawn', 'lobster',
           'subagents', 'llm-task',
         ],
       },
       memorySearch: {
         sources: ['memory'],
       },
+      communication: {
+        mode: 'direct',
+        canInitiateDirect: true,
+        canReceiveDirect: true,
+        allowedRoles: ['orchestrator', 'coordinator', 'operator', 'product', 'strategist', 'visual', 'design'],
+      },
+      capabilities: ['content', 'copywriting', 'agent_communication'],
     },
   },
   {
@@ -399,20 +465,123 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
         allow: [
           'read', 'exec', 'bash',
           'memory_search', 'memory_get',
-          'agents_list',
+          'agents_list', 'sessions_send',
           'thinking', 'reactions', 'skills',
           'web',
         ],
         deny: [
           ...COMMON_DENY,
           'write', 'edit', 'apply_patch', 'process',
-          'browser', 'sessions_send', 'sessions_spawn', 'lobster',
+          'browser', 'sessions_spawn', 'lobster',
           'subagents', 'llm-task',
         ],
       },
       memorySearch: {
         sources: ['memory'],
       },
+      communication: {
+        mode: 'direct',
+        canInitiateDirect: true,
+        canReceiveDirect: true,
+        allowedRoles: ['orchestrator', 'coordinator', 'operator', 'developer', 'builder', 'reviewer'],
+      },
+      workloadLanes: ['product_conception', 'image_prompting'],
+      functions: ['product_framing', 'image_direction'],
+      skills: ['feature_structuring', 'visual_direction', 'prompt_iteration'],
+      abilities: ['recommendation_under_uncertainty', 'image_handoff'],
+      capabilities: ['product', 'feature_spec', 'image_prompting', 'visual_taste', 'agent_communication'],
+    },
+  },
+  {
+    type: 'product-strategist',
+    label: 'Product Strategist',
+    description: 'Sharp product framing, MVP shaping, wedge selection, and feature specification.',
+    emoji: '\ud83e\uddf0',
+    modelTier: 'sonnet',
+    toolCount: 10,
+    config: {
+      model: {
+        primary: 'anthropic/claude-sonnet-4-20250514',
+        fallbacks: SONNET_FALLBACKS,
+      },
+      identity: {
+        name: '',
+        theme: 'product strategist',
+        emoji: '\ud83e\uddf0',
+      },
+      sandbox: {
+        mode: 'all',
+        workspaceAccess: 'ro',
+        scope: 'agent',
+      },
+      tools: {
+        allow: [
+          'read', 'web', 'browser',
+          'memory_search', 'memory_get',
+          'agents_list', 'sessions_send', 'thinking', 'reactions', 'skills', 'write',
+        ],
+        deny: [...COMMON_DENY, 'exec', 'bash', 'process', 'apply_patch', 'sessions_spawn', 'lobster'],
+      },
+      memorySearch: {
+        sources: ['memory', 'sessions'],
+      },
+      communication: {
+        mode: 'direct',
+        canInitiateDirect: true,
+        canReceiveDirect: true,
+        allowedRoles: ['orchestrator', 'coordinator', 'operator', 'research', 'analyst', 'visual', 'design', 'content'],
+      },
+      workloadLanes: ['product_conception', 'research'],
+      functions: ['product_framing', 'research_synthesis'],
+      skills: ['product_taste', 'feature_structuring', 'tradeoff_analysis'],
+      abilities: ['recommendation_under_uncertainty', 'grounded_uncertainty'],
+      capabilities: ['product', 'mvp', 'gtm', 'feature_spec', 'concept_note', 'agent_communication'],
+    },
+  },
+  {
+    type: 'visual-director',
+    label: 'Visual Director',
+    description: 'Converts rough ideas into strong prompts, art direction, and image revision guidance.',
+    emoji: '\ud83c\udfa8',
+    modelTier: 'haiku',
+    toolCount: 9,
+    config: {
+      model: {
+        primary: 'anthropic/claude-haiku-4-5',
+        fallbacks: HAIKU_FALLBACKS,
+      },
+      identity: {
+        name: '',
+        theme: 'visual director',
+        emoji: '\ud83c\udfa8',
+      },
+      sandbox: {
+        mode: 'all',
+        workspaceAccess: 'none',
+        scope: 'agent',
+      },
+      tools: {
+        allow: [
+          'write', 'edit', 'web',
+          'memory_search', 'memory_get',
+          'agents_list', 'sessions_send', 'thinking', 'reactions', 'skills',
+        ],
+        deny: [...COMMON_DENY, 'read', 'apply_patch', 'exec', 'bash', 'process', 'sessions_spawn', 'lobster'],
+      },
+      memorySearch: {
+        sources: ['memory'],
+      },
+      communication: {
+        mode: 'direct',
+        canInitiateDirect: true,
+        canReceiveDirect: true,
+        allowedRoles: ['orchestrator', 'coordinator', 'operator', 'product', 'strategist', 'content'],
+      },
+      workloadLanes: ['image_prompting'],
+      functions: ['image_direction'],
+      skills: ['visual_direction', 'prompt_iteration'],
+      abilities: ['image_handoff', 'concise_reasoning'],
+      capabilities: ['image_prompting', 'art_direction', 'visual_taste', 'hero_image', 'agent_communication'],
     },
   },
 ]

@@ -13,6 +13,7 @@ import { existsSync, readFileSync, statSync } from 'fs'
 import { resolveWithin } from './paths'
 import { logger } from './logger'
 import { parseJsonRelaxed } from './json-relaxed'
+import { enrichConfigWithCommunication, inferCommunicationFallback } from './agent-communication'
 
 interface OpenClawAgent {
   id: string
@@ -41,6 +42,7 @@ interface OpenClawAgent {
     deny?: string[]
   }
   memorySearch?: any
+  communication?: any
 }
 
 export interface SyncResult {
@@ -164,10 +166,9 @@ function readWorkspaceFile(workspace: string | undefined, filename: string): str
 export function enrichAgentConfigFromWorkspace(configData: any): any {
   if (!configData || typeof configData !== 'object') return configData
   const workspace = typeof configData.workspace === 'string' ? configData.workspace : undefined
-  if (!workspace) return configData
 
-  const identityFile = readWorkspaceFile(workspace, 'identity.md')
-  const toolsFile = readWorkspaceFile(workspace, 'TOOLS.md')
+  const identityFile = workspace ? readWorkspaceFile(workspace, 'identity.md') : null
+  const toolsFile = workspace ? readWorkspaceFile(workspace, 'TOOLS.md') : null
 
   const mergedIdentity = {
     ...parseIdentityFromFile(identityFile || ''),
@@ -178,11 +179,15 @@ export function enrichAgentConfigFromWorkspace(configData: any): any {
     ...((configData.tools && typeof configData.tools === 'object') ? configData.tools : {}),
   }
 
-  return {
+  return enrichConfigWithCommunication({
     ...configData,
     identity: Object.keys(mergedIdentity).length > 0 ? mergedIdentity : configData.identity,
     tools: Object.keys(mergedTools).length > 0 ? mergedTools : configData.tools,
-  }
+  }, inferCommunicationFallback(
+    String(mergedIdentity.name || configData.name || configData.openclawId || 'agent'),
+    String(mergedIdentity.theme || configData.identity?.theme || 'agent'),
+    identityFile,
+  ))
 }
 
 /** Read and parse openclaw.json agents list */
@@ -214,6 +219,7 @@ function mapAgentToMC(agent: OpenClawAgent): {
     tools: agent.tools,
     subagents: agent.subagents,
     memorySearch: agent.memorySearch,
+    communication: agent.communication,
     workspace: agent.workspace,
     agentDir: agent.agentDir,
     isDefault: agent.default || false,
