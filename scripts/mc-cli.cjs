@@ -159,6 +159,58 @@ function bodyFromFlags(flags) {
   return undefined;
 }
 
+async function runLocalBridge(scriptKey, extraArgs = []) {
+  const { spawn } = require('child_process');
+  const path = require('path');
+  const os = require('os');
+  
+  const SCRIPT_MAP = {
+    'memory:status': ['cli-memory.cjs', 'status'],
+    'memory:sync': ['cli-memory.cjs', 'sync', '--apply'],
+    'memory:sync:dry-run': ['cli-memory.cjs', 'sync'],
+    'memory:query': ['cli-memory.cjs', 'query'],
+    'agents:task:create': ['cli-agents.cjs', 'task', 'create'],
+    'agents:task:list': ['cli-agents.cjs', 'task', 'list'],
+    'agents:task:status': ['cli-agents.cjs', 'task', 'status'],
+    'agents:run': ['cli-agents.cjs', 'run', 'hermes'],
+  };
+  
+  const mapping = SCRIPT_MAP[scriptKey];
+  if (!mapping) {
+    return { ok: false, error: 'Unknown local script: ' + scriptKey };
+  }
+  
+  const scriptsDir = path.join(os.homedir(), 'mission-control', 'scripts');
+  const [scriptName, ...defaultArgs] = mapping;
+  const scriptPath = path.join(scriptsDir, scriptName);
+  const allArgs = [...defaultArgs, ...extraArgs];
+  
+  return new Promise((resolve, reject) => {
+    const child = spawn('node', [scriptPath, ...allArgs], {
+      cwd: scriptsDir,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    
+    let stdout = '';
+    let stderr = '';
+    
+    child.stdout.on('data', (data) => { stdout += data.toString(); });
+    child.stderr.on('data', (data) => { stderr += data.toString(); });
+    
+    child.on('close', (code) => {
+      try {
+        resolve(JSON.parse(stdout));
+      } catch {
+        resolve({ raw: stdout, code });
+      }
+    });
+    
+    child.on('error', (e) => {
+      resolve({ ok: false, error: e.message });
+    });
+  });
+}
+
 async function httpRequest({ baseUrl, apiKey, cookie, method, route, body, timeoutMs = 20000 }) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -463,6 +515,120 @@ const commands = {
     }),
   },
 
+  // --- LOCAL BRIDGE (offline fallback) ---
+  memory: {
+    status: async (flags, ctx) => {
+      try {
+        return await runLocalBridge('memory:status', []);
+      } catch (e) {
+        return { ok: false, error: e.message };
+      }
+    },
+    sync: async (flags, ctx) => {
+      const dryRun = !flags.apply;
+      return runLocalBridge(dryRun ? 'memory:sync:dry-run' : 'memory:sync', []);
+    },
+    query: async (flags, ctx) => {
+      const term = flags._[2] || flags.term || '';
+      return runLocalBridge('memory:query', [term]);
+    },
+  },
+  
+  task: {
+    create: async (flags, ctx) => {
+      const title = flags._[2] || flags.title || '';
+      return runLocalBridge('agents:task:create', [title]);
+    },
+    list: async (flags, ctx) => {
+      return runLocalBridge('agents:task:list', []);
+    },
+    status: async (flags, ctx) => {
+      const id = flags._[2] || flags.id || '';
+      return runLocalBridge('agents:task:status', [id]);
+    },
+  },
+  
+  agents: {
+    run: async (flags, ctx) => {
+      const taskId = flags.task;
+      const prompt = flags._[2] || '';
+      if (taskId) {
+        return runLocalBridge('agents:run', ['--task', taskId, prompt]);
+      } else {
+        return runLocalBridge('agents:run', []);
+      }
+    },
+  },
+  
+  routes: {
+    verify: async (flags, ctx) => {
+      const os = require('os');
+      const path = require('path');
+      const fs = require('fs');
+      const homedir = os.homedir();
+      
+      const yamlPath = path.join(homedir, 'mission-control', 'config', 'model-routes.yaml');
+      let yamlRoutes = null;
+      if (fs.existsSync(yamlPath)) {
+        try {
+          yamlRoutes = JSON.parse(fs.readFileSync(yamlPath, 'utf-8').toString().replace(/^routes:/, '"routes":'));
+        } catch {}
+      }
+      
+      let hermesRoutes = null;
+      const hermesPy = path.join(homedir, '.hermes', 'agent.py');
+      if (fs.existsSync(hermesPy)) {
+        const content = fs.readFileSync(hermesPy, 'utf-8');
+        const matches = content.match(/"(\w+)":\s*\{"model":\s*"([^"]+)"/g);
+        if (matches) {
+          hermesRoutes = matches.map(m => {
+            const p = m.match(/"(\w+)":\s*\{"model":\s*"([^"]+)"/);
+            return { tier: p[1], model: p[2] };
+          });
+        }
+      }
+      
+      return { 
+        ok: true, 
+        yaml: yamlRoutes, 
+        hermes: hermesRoutes,
+        authoritative: 'config/model-routes.yaml'
+      };
+    },
+  },
+  
+  system: {
+    health: async (flags, ctx) => {
+      const os = require('os');
+      const path = require('path');
+      const fs = require('fs');
+      
+      const results = {};
+      const homedir = os.homedir();
+      
+      // Check DB
+      const dbPath = path.join(homedir, 'mission-control', '.data', 'mission-control.db');
+      results.db = fs.existsSync(dbPath) ? 'PASS' : 'FAIL';
+      
+      // Check memory
+      try {
+        const BetterSqlite3 = require('better-sqlite3');
+        const db = new BetterSqlite3(dbPath, { readonly: true });
+        const total = db.prepare('SELECT COUNT(*) as t FROM memory_entries').get();
+        results.memory = `PASS (${total.t} records)`;
+        db.close();
+      } catch (e) {
+        results.memory = 'FAIL';
+      }
+      
+      // Check routes
+      const routesPath = path.join(homedir, 'mission-control', 'config', 'model-routes.yaml');
+      results.routes = fs.existsSync(routesPath) ? 'PASS' : 'MISSING';
+      
+      return { ok: true, health: results };
+    },
+  },
+
   tokens: {
     list: (flags) => {
       let qs = '?action=list';
@@ -637,7 +803,95 @@ async function handleEventsWatch(flags, ctx) {
 // --- Main ---
 
 async function run() {
-  const parsed = parseArgs(process.argv.slice(2));
+  const rawArgs = process.argv.slice(2);
+  
+  // --- OFFLINE LOCAL COMMANDS (no server required) ---
+  // Handle these directly before general parsing
+  if (rawArgs[0] === 'memory') {
+    if (rawArgs[1] === 'status') {
+      const result = await runLocalBridge('memory:status', []);
+      console.log(JSON.stringify(result));
+      return;
+    }
+    if (rawArgs[1] === 'sync') {
+      const dryRun = !rawArgs.includes('--apply');
+      const result = await runLocalBridge(dryRun ? 'memory:sync:dry-run' : 'memory:sync', []);
+      console.log(JSON.stringify(result));
+      return;
+    }
+    if (rawArgs[1] === 'query' && rawArgs[2]) {
+      const result = await runLocalBridge('memory:query', [rawArgs[2]]);
+      console.log(JSON.stringify(result));
+      return;
+    }
+  }
+  
+  if (rawArgs[0] === 'task' && rawArgs[1] === 'create') {
+    const title = rawArgs.slice(2).join(' ');
+    const result = await runLocalBridge('agents:task:create', [title]);
+    console.log(JSON.stringify(result));
+    return;
+  }
+  
+  if (rawArgs[0] === 'task' && rawArgs[1] === 'list') {
+    const result = await runLocalBridge('agents:task:list', []);
+    console.log(JSON.stringify(result));
+    return;
+  }
+  
+  if (rawArgs[0] === 'agents' && rawArgs[1] === 'run' && rawArgs[2] === 'hermes') {
+    const taskIdx = rawArgs.indexOf('--task');
+    const taskId = taskIdx > -1 ? rawArgs[taskIdx + 1] : null;
+    const result = await runLocalBridge('agents:run', taskId ? ['--task', taskId] : []);
+    console.log(JSON.stringify(result));
+    return;
+  }
+  
+  if (rawArgs[0] === 'routes' && rawArgs[1] === 'verify') {
+    const os = require('os');
+    const path = require('path');
+    const fs = require('fs');
+    const homedir = os.homedir();
+    const yamlPath = path.join(homedir, 'mission-control', 'config', 'model-routes.yaml');
+    let yamlRoutes = null;
+    if (fs.existsSync(yamlPath)) {
+      try { yamlRoutes = JSON.parse(fs.readFileSync(yamlPath, 'utf-8').toString().replace(/^routes:/, '"routes":')); } catch {}
+    }
+    let hermesRoutes = null;
+    const hermesPy = path.join(homedir, '.hermes', 'agent.py');
+    if (fs.existsSync(hermesPy)) {
+      const content = fs.readFileSync(hermesPy, 'utf-8');
+      const matches = content.match(/"(\w+)":\s*\{"model":\s*"([^"]+)"/g);
+      if (matches) hermesRoutes = matches.map(m => { const p = m.match(/"(\w+)":\s*\{"model":\s*"([^"]+)"/); return { tier: p[1], model: p[2] }; });
+    }
+    console.log(JSON.stringify({ ok: true, yaml: yamlRoutes, hermes: hermesRoutes, authoritative: 'config/model-routes.yaml' }));
+    return;
+  }
+  
+  if (rawArgs[0] === 'system' && rawArgs[1] === 'health') {
+    const os = require('os');
+    const path = require('path');
+    const fs = require('fs');
+    const homedir = os.homedir();
+    const results = {};
+    const dbPath = path.join(homedir, 'mission-control', '.data', 'mission-control.db');
+    results.db = fs.existsSync(dbPath) ? 'PASS' : 'FAIL';
+    try {
+      const BetterSqlite3 = require('better-sqlite3');
+      const db = new BetterSqlite3(dbPath, { readonly: true });
+      const total = db.prepare('SELECT COUNT(*) as t FROM memory_entries').get();
+      results.memory = `PASS (${total.t} records)`;
+      db.close();
+    } catch { results.memory = 'FAIL'; }
+    const routesPath = path.join(homedir, 'mission-control', 'config', 'model-routes.yaml');
+    results.routes = fs.existsSync(routesPath) ? 'PASS' : 'MISSING';
+    console.log(JSON.stringify({ ok: true, health: results }));
+    return;
+  }
+  
+  // --- END OFFLINE COMMANDS ---
+  
+  const parsed = parseArgs(rawArgs);
   if (parsed.flags.help || parsed._.length === 0) {
     usage();
     process.exit(EXIT.OK);
@@ -699,13 +953,13 @@ async function run() {
       ? handler(parsed.flags, ctx)
       : handler);
 
-    // If handler returned an http result directly (auth login/logout)
-    if (result_or_config && 'ok' in result_or_config && 'status' in result_or_config) {
+    // If handler returned a local result (has 'ok' property)
+    if (result_or_config && 'ok' in result_or_config) {
       printResult(result_or_config, asJson);
-      process.exit(result_or_config.ok ? EXIT.OK : mapStatusToExit(result_or_config.status));
+      process.exit(result_or_config.ok ? EXIT.OK : EXIT.USAGE);
     }
 
-    // Otherwise it returned { method, route, body? } — execute the request
+    // Otherwise it returned { method, route, body? } — execute the HTTP request
     const { method, route, body } = result_or_config;
     const result = await httpRequest({
       baseUrl,
