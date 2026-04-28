@@ -68,4 +68,41 @@ function memoryStatus() {
   };
 }
 
-module.exports = { writeMemory, queryMemory, memoryStatus };
+function scoreEntry(entry, prompt, taskId, now) {
+  const words = prompt.toLowerCase().split(/\s+/).filter(Boolean);
+  const haystack = (entry.content + ' ' + (entry.tags || '')).toLowerCase();
+  const contentMatch = words.length > 0
+    ? words.filter(w => haystack.includes(w)).length / words.length
+    : 0;
+
+  const recency = 1 / (1 + (now - entry.created_at) / 86400);
+  const taskBoost = entry.task_id === Number(taskId) ? 0.5 : 0;
+
+  const outcomeMatch = (entry.tags || '').match(/outcome:(success|failure|unknown)/);
+  const outcome = outcomeMatch ? outcomeMatch[1] : 'unknown';
+  const outcomeWeight = outcome === 'success' ? 1 : outcome === 'failure' ? -1 : 0;
+
+  const confidenceWeight = entry.confidence != null ? entry.confidence : 0.5;
+
+  return contentMatch * 2 + recency + taskBoost + outcomeWeight + confidenceWeight;
+}
+
+function recallMemory(agent, taskId, prompt, limit = 3) {
+  const database = getDb();
+  const candidates = database.prepare(`
+    SELECT id, content, agent, task_id, tags, confidence, created_at
+    FROM memory_entries
+    WHERE source = ? AND category = 'execution'
+    ORDER BY created_at DESC
+    LIMIT 50
+  `).all(agent);
+
+  const now = Math.floor(Date.now() / 1000);
+  return candidates
+    .map(e => ({ ...e, score: scoreEntry(e, prompt, taskId, now) }))
+    .filter(e => e.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit);
+}
+
+module.exports = { writeMemory, queryMemory, memoryStatus, recallMemory };

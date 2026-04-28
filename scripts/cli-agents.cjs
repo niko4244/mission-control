@@ -130,11 +130,14 @@ function runHermes(prompt, options = {}) {
     `).run(taskId);
   } catch {}
 
+  const recall = memoryService.recallMemory('hermes', taskId, prompt);
+
   console.log(JSON.stringify({
     status: 'executing',
     agent,
     task_id: taskId,
-    prompt: String(prompt || '').substring(0, 100)
+    prompt: String(prompt || '').substring(0, 100),
+    recall_count: recall.length,
   }));
 
   try {
@@ -158,8 +161,9 @@ function runHermes(prompt, options = {}) {
       taskId: taskId ? Number(taskId) : null,
       agent: 'hermes',
       runId: `hermes-${taskId}-${Date.now()}`,
-      tags: 'execution,hermes,mission-control',
+      tags: 'execution,hermes,mission-control,outcome:unknown',
       confidence: 1,
+      sourceRef: `recall:${recall.length}`,
     });
     console.log('memory entry created');
   } catch (err) {
