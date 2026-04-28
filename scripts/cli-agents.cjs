@@ -102,9 +102,22 @@ function listTasks(options = {}) {
 function runHermes(prompt, options = {}) {
   const { taskId = null, agent = 'hermes' } = options;
   
-  // GUARD: Require task ID
+  // GUARD: Require task ID — log all attempts (blocked or not) for audit trail
+  const attemptedAt = Math.floor(Date.now() / 1000);
+  try {
+    const database = getDb();
+    database.prepare(`
+      INSERT OR IGNORE INTO tasks (title, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?)
+    `).run(
+      `[AUDIT] agents run hermes — ${taskId ? 'task:' + taskId : 'NO TASK ID'} — ${new Date().toISOString()}`,
+      taskId ? 'audit_with_task' : 'audit_blocked',
+      attemptedAt, attemptedAt
+    );
+  } catch {}
+
   if (!taskId) {
-    console.log(JSON.stringify({ 
+    console.log(JSON.stringify({
       status: 'blocked',
       reason: 'Task ID required',
       message: 'Use: mc agents run hermes --task <task_id> "<prompt>"',
