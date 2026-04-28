@@ -145,19 +145,21 @@ function buildExecutionPrompt(prompt, context) {
 
   if (context.successfulPatterns.length > 0) {
     lines.push('[MEMORY CONTEXT]');
-    lines.push('REUSE (prior success):');
+    lines.push('REQUIRED BEHAVIOR:');
+    lines.push('- Prefer patterns from REUSE:');
     context.successfulPatterns.forEach(e =>
       lines.push(`  - ${e.content} (score: ${e.score != null ? e.score.toFixed(2) : 'n/a'})`));
   }
   if (context.failedPatterns.length > 0) {
-    if (!lines.length) lines.push('[MEMORY CONTEXT]');
-    lines.push('AVOID (prior failure):');
+    if (!lines.length) { lines.push('[MEMORY CONTEXT]'); lines.push('REQUIRED BEHAVIOR:'); }
+    lines.push('- Do NOT repeat patterns from AVOID:');
     context.failedPatterns.forEach(e =>
       lines.push(`  - ${e.content} (score: ${e.score != null ? e.score.toFixed(2) : 'n/a'})`));
   }
   if (context.neutralContext.length > 0) {
     if (!lines.length) lines.push('[MEMORY CONTEXT]');
-    lines.push('REFERENCE (neutral):');
+    lines.push('REFERENCE:');
+    lines.push('- Neutral context for optional use:');
     context.neutralContext.forEach(e =>
       lines.push(`  - ${e.content} (score: ${e.score != null ? e.score.toFixed(2) : 'n/a'})`));
   }
