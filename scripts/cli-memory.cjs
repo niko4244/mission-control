@@ -203,6 +203,25 @@ function memorySync(options = {}) {
 }
 
 // ============================================================================
+// MEMORY WRITE
+// ============================================================================
+
+function memoryWrite(source, category, content) {
+  try {
+    const database = getDb();
+    const result = database.prepare(`
+      INSERT INTO memory_entries (source, category, content, created_at, updated_at)
+      VALUES (?, ?, ?, unixepoch(), unixepoch())
+    `).run(source, category, content);
+    console.log(JSON.stringify({ status: 'ok', id: result.lastInsertRowid }));
+    return { id: result.lastInsertRowid };
+  } catch (e) {
+    console.log(JSON.stringify({ status: 'error', message: e.message }));
+    return null;
+  }
+}
+
+// ============================================================================
 // MEMORY QUERY
 // ============================================================================
 
@@ -245,7 +264,16 @@ function main() {
   const args = process.argv.slice(2);
   const command = args[0] || 'status';
   
-  if (command === 'status') {
+  if (command === 'write') {
+    const source = args[1] || 'unknown';
+    const category = args[2] || 'general';
+    const content = args.slice(3).join(' ');
+    if (!content) {
+      console.log(JSON.stringify({ error: 'Content required' }));
+      process.exit(1);
+    }
+    memoryWrite(source, category, content);
+  } else if (command === 'status') {
     memoryStatus();
   } else if (command === 'sync') {
     const source = args.includes('--source') ? args[args.indexOf('--source') + 1] : 'all';
