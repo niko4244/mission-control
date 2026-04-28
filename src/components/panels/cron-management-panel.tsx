@@ -584,18 +584,18 @@ export function CronManagementPanel() {
   const monthDays = Array.from({ length: 42 }, (_, idx) => addDays(monthGridStart, idx))
 
   const calendarBounds = useMemo(() => {
-    if (calendarView === 'day') {
-      return { startMs: dayStart.getTime(), endMs: dayEnd.getTime() }
-    }
-    if (calendarView === 'week') {
-      return { startMs: weekStart.getTime(), endMs: addDays(weekStart, 7).getTime() }
-    }
-    if (calendarView === 'month') {
-      return { startMs: monthGridStart.getTime(), endMs: addDays(monthGridStart, 42).getTime() }
-    }
+    // Recompute from calendarDate (stable React state) so the React Compiler can verify
+    // the deps are not mutable objects derived from outside the memo.
+    const ds = startOfDay(calendarDate)
+    const de = addDays(ds, 1)
+    const ws = getWeekStart(calendarDate)
+    const mgs = getMonthStartGrid(calendarDate)
+    if (calendarView === 'day') return { startMs: ds.getTime(), endMs: de.getTime() }
+    if (calendarView === 'week') return { startMs: ws.getTime(), endMs: addDays(ws, 7).getTime() }
+    if (calendarView === 'month') return { startMs: mgs.getTime(), endMs: addDays(mgs, 42).getTime() }
     const agendaStart = Date.now()
     return { startMs: agendaStart, endMs: addDays(startOfDay(new Date()), 30).getTime() }
-  }, [calendarView, dayEnd, dayStart, monthGridStart, weekStart])
+  }, [calendarDate, calendarView])
 
   // Aggregate: unique jobs per day with run count (for week/month cells)
   const jobSummariesByDay = useMemo(() => {

@@ -2,6 +2,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+// Tests that hardcode POSIX-style paths only work on POSIX systems.
+const itPosix = process.platform === 'win32' ? it.skip : it
+
 async function loadConfigWithEnv(env: Record<string, string | undefined>) {
   vi.resetModules()
 
@@ -54,7 +57,7 @@ describe('config data paths', () => {
     vi.resetModules()
   })
 
-  it('derives db and token paths from MISSION_CONTROL_DATA_DIR', async () => {
+  itPosix('derives db and token paths from MISSION_CONTROL_DATA_DIR', async () => {
     const config = await loadConfigWithEnv({
       MISSION_CONTROL_DATA_DIR: '/tmp/mission-control-data',
       MISSION_CONTROL_DB_PATH: undefined,
@@ -78,7 +81,7 @@ describe('config data paths', () => {
     expect(config.tokensPath).toBe('/tmp/custom-tokens.json')
   })
 
-  it('uses a build-scoped worker data dir during next build', async () => {
+  itPosix('uses a build-scoped worker data dir during next build', async () => {
     const config = await loadConfigWithEnv({
       NEXT_PHASE: 'phase-production-build',
       MISSION_CONTROL_DATA_DIR: '/tmp/runtime-data',
@@ -103,7 +106,9 @@ describe('config data paths', () => {
     })
 
     const expectedBuildRoot = path.join(os.tmpdir(), 'mission-control-build')
-    expect(config.dataDir).toMatch(new RegExp(`^${expectedBuildRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/worker-\\d+$`))
+    const escapedRoot = expectedBuildRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const sepPattern = path.sep === '\\' ? '\\\\' : '/'
+    expect(config.dataDir).toMatch(new RegExp(`^${escapedRoot}${sepPattern}worker-\\d+$`))
     expect(config.dbPath).toBe('/tmp/build.db')
     expect(config.tokensPath).toBe('/tmp/build-tokens.json')
   })

@@ -2,15 +2,19 @@ import { describe, it, expect } from 'vitest'
 import { resolveWithin } from '../paths'
 import path from 'node:path'
 
+// Path-value tests use POSIX-style paths and only make sense on POSIX systems.
+// The security-behavior tests (throw cases) run on all platforms.
+const itPosix = process.platform === 'win32' ? it.skip : it
+
 describe('resolveWithin', () => {
   const base = '/tmp/sandbox'
 
-  it('resolves a simple relative path within base', () => {
+  itPosix('resolves a simple relative path within base', () => {
     const result = resolveWithin(base, 'file.txt')
     expect(result).toBe('/tmp/sandbox/file.txt')
   })
 
-  it('resolves nested relative path', () => {
+  itPosix('resolves nested relative path', () => {
     const result = resolveWithin(base, 'subdir/file.txt')
     expect(result).toBe('/tmp/sandbox/subdir/file.txt')
   })
@@ -27,12 +31,12 @@ describe('resolveWithin', () => {
     expect(() => resolveWithin(base, '/etc/passwd')).toThrow('Path escapes base directory')
   })
 
-  it('allows an absolute path within the base', () => {
+  itPosix('allows an absolute path within the base', () => {
     const result = resolveWithin(base, '/tmp/sandbox/file.txt')
     expect(result).toBe('/tmp/sandbox/file.txt')
   })
 
-  it('handles double slashes and normalizes', () => {
+  itPosix('handles double slashes and normalizes', () => {
     const result = resolveWithin(base, 'subdir//file.txt')
     expect(result).toBe('/tmp/sandbox/subdir/file.txt')
   })
@@ -41,7 +45,7 @@ describe('resolveWithin', () => {
     expect(() => resolveWithin(base, '../other/file.txt')).toThrow()
   })
 
-  it('handles base dir with trailing slash', () => {
+  itPosix('handles base dir with trailing slash', () => {
     const result = resolveWithin('/tmp/sandbox/', 'file.txt')
     expect(result).toBe('/tmp/sandbox/file.txt')
   })

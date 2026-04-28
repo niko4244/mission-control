@@ -18,7 +18,7 @@ vi.mock('better-sqlite3', () => ({
   default: vi.fn((dbPath?: string) => ({
     prepare: (query: string) => ({
       get: (...args: any[]) => {
-        const name = dbPath ? String(dbPath).split('/').pop() || '' : ''
+        const name = dbPath ? String(dbPath).split(/[/\\]/).pop() || '' : ''
         const rows = dbRowsByName[name] || dbRowsByName.default || {}
         if (query.includes('sqlite_master') && args[0] === 'session') return { name: 'session' }
         if (query.includes('sqlite_master') && args[0] === 'project') return { name: 'project' }
@@ -30,7 +30,7 @@ vi.mock('better-sqlite3', () => ({
         return undefined
       },
       all: (...args: any[]) => {
-        const name = dbPath ? String(dbPath).split('/').pop() || '' : ''
+        const name = dbPath ? String(dbPath).split(/[/\\]/).pop() || '' : ''
         const rows = dbRowsByName[name] || dbRowsByName.default || {}
         if (query.includes('PRAGMA table_info(session)')) {
           const sample = rows.session?.[0] || {}
