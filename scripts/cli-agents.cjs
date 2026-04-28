@@ -154,7 +154,13 @@ function runHermes(prompt, options = {}) {
   }));
 
   try {
-    memoryService.writeMemory('hermes', 'execution', prompt || 'no prompt');
+    memoryService.writeMemory('hermes', 'execution', prompt || 'no prompt', {
+      taskId: taskId ? Number(taskId) : null,
+      agent: 'hermes',
+      runId: `hermes-${taskId}-${Date.now()}`,
+      tags: 'execution,hermes,mission-control',
+      confidence: 1,
+    });
     console.log('memory entry created');
   } catch (err) {
     console.error('memory write failed:', err.message);

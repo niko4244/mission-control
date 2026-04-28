@@ -202,9 +202,9 @@ function memoryWrite(source, category, content) {
 // MEMORY QUERY
 // ============================================================================
 
-function memoryQuery(searchTerm) {
+function memoryQuery(searchTerm, filters = {}) {
   try {
-    const rows = memoryService.queryMemory(searchTerm);
+    const rows = memoryService.queryMemory(searchTerm, filters);
     const result = {
       query: searchTerm,
       results: rows.length,
@@ -212,6 +212,8 @@ function memoryQuery(searchTerm) {
         id: r.id,
         source: r.source,
         category: r.category,
+        agent: r.agent,
+        task_id: r.task_id,
         content_preview: r.content.substring(0, 200),
         created_at: r.created_at
       }))
@@ -253,7 +255,13 @@ function main() {
       console.log(JSON.stringify({ error: 'Query term required' }));
       process.exit(1);
     }
-    memoryQuery(term);
+    const sourceIdx = args.indexOf('--source');
+    const categoryIdx = args.indexOf('--category');
+    const filters = {
+      source: sourceIdx > -1 ? args[sourceIdx + 1] : null,
+      category: categoryIdx > -1 ? args[categoryIdx + 1] : null,
+    };
+    memoryQuery(term, filters);
   } else {
     console.log(JSON.stringify({ error: `Unknown command: ${command}` }));
     process.exit(1);

@@ -22,23 +22,30 @@ function getDb() {
   return db;
 }
 
-function writeMemory(source, category, content) {
+function writeMemory(source, category, content, meta = {}) {
+  const { taskId = null, agent = null, runId = null, tags = null, confidence = null, sourceRef = null, project = null } = meta;
   const database = getDb();
   const result = database.prepare(`
-    INSERT INTO memory_entries (source, category, content, created_at, updated_at)
-    VALUES (?, ?, ?, unixepoch(), unixepoch())
-  `).run(source, category, content);
+    INSERT INTO memory_entries
+      (source, category, content, task_id, agent, run_id, tags, confidence, source_ref, project, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())
+  `).run(source, category, content, taskId, agent, runId, tags, confidence, sourceRef, project);
   return { id: result.lastInsertRowid };
 }
 
-function queryMemory(searchTerm) {
+function queryMemory(searchTerm, filters = {}) {
+  const { source = null, category = null } = filters;
   const database = getDb();
-  return database.prepare(`
-    SELECT * FROM memory_entries
-    WHERE content LIKE ? OR tags LIKE ?
-    ORDER BY created_at DESC
-    LIMIT 20
-  `).all(`%${searchTerm}%`, `%${searchTerm}%`);
+  let sql = `
+    SELECT id, source, category, agent, task_id, run_id, tags, confidence, content, created_at
+    FROM memory_entries
+    WHERE (content LIKE ? OR tags LIKE ?)
+  `;
+  const params = [`%${searchTerm}%`, `%${searchTerm}%`];
+  if (source) { sql += ' AND source = ?'; params.push(source); }
+  if (category) { sql += ' AND category = ?'; params.push(category); }
+  sql += ' ORDER BY created_at DESC LIMIT 20';
+  return database.prepare(sql).all(...params);
 }
 
 function memoryStatus() {
