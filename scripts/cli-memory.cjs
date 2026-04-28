@@ -227,6 +227,21 @@ function memoryQuery(searchTerm, filters = {}) {
 }
 
 // ============================================================================
+// MEMORY OUTCOME
+// ============================================================================
+
+function memoryOutcome(id, outcome) {
+  try {
+    const result = memoryService.markOutcome(Number(id), outcome);
+    console.log(JSON.stringify({ status: 'ok', ...result }));
+    return result;
+  } catch (e) {
+    console.log(JSON.stringify({ status: 'error', message: e.message }));
+    return null;
+  }
+}
+
+// ============================================================================
 // MAIN
 // ============================================================================
 
@@ -262,6 +277,14 @@ function main() {
       category: categoryIdx > -1 ? args[categoryIdx + 1] : null,
     };
     memoryQuery(term, filters);
+  } else if (command === 'outcome') {
+    const id = args[1];
+    const outcome = args[2];
+    if (!id || !outcome) {
+      console.log(JSON.stringify({ error: 'Usage: outcome <id> <success|failure|unknown>' }));
+      process.exit(1);
+    }
+    memoryOutcome(id, outcome);
   } else {
     console.log(JSON.stringify({ error: `Unknown command: ${command}` }));
     process.exit(1);

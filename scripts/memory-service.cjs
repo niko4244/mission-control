@@ -111,4 +111,24 @@ function recallMemory(agent, taskId, prompt, limit = 3) {
     .slice(0, limit);
 }
 
-module.exports = { writeMemory, queryMemory, memoryStatus, recallMemory };
+function markOutcome(id, outcome) {
+  const valid = ['success', 'failure', 'unknown'];
+  if (!valid.includes(outcome)) throw new Error(`Invalid outcome: ${outcome}`);
+
+  const database = getDb();
+  const row = database.prepare('SELECT tags FROM memory_entries WHERE id = ?').get(id);
+  if (!row) return { id, updated: false, reason: 'not found' };
+
+  const current = row.tags || '';
+  const updated = /outcome:\w+/.test(current)
+    ? current.replace(/outcome:\w+/, `outcome:${outcome}`)
+    : `${current},outcome:${outcome}`;
+
+  database.prepare(
+    'UPDATE memory_entries SET tags = ?, updated_at = unixepoch() WHERE id = ?'
+  ).run(updated, id);
+
+  return { id, outcome, updated: true };
+}
+
+module.exports = { writeMemory, queryMemory, memoryStatus, recallMemory, markOutcome };
