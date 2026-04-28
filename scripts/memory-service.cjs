@@ -69,7 +69,10 @@ function memoryStatus() {
 }
 
 function scoreEntry(entry, prompt, taskId, now) {
-  const words = prompt.toLowerCase().split(/\s+/).filter(Boolean);
+  const stopwords = new Set([
+    'the','is','and','to','a','of','in','for','on','with','test','memory'
+  ]);
+  const words = prompt.toLowerCase().split(/\s+/).filter(w => w && !stopwords.has(w));
   const haystack = (entry.content + ' ' + (entry.tags || '')).toLowerCase();
   const contentMatch = words.length > 0
     ? words.filter(w => haystack.includes(w)).length / words.length
@@ -84,7 +87,9 @@ function scoreEntry(entry, prompt, taskId, now) {
 
   const confidenceWeight = entry.confidence != null ? entry.confidence : 0.5;
 
-  return contentMatch * 2 + recency + taskBoost + outcomeWeight + confidenceWeight;
+  const phraseMatch = haystack.includes(prompt.toLowerCase()) ? 1 : 0;
+
+  return contentMatch * 2 + recency + taskBoost + outcomeWeight + confidenceWeight + phraseMatch;
 }
 
 function recallMemory(agent, taskId, prompt, limit = 3) {
@@ -100,7 +105,7 @@ function recallMemory(agent, taskId, prompt, limit = 3) {
   const now = Math.floor(Date.now() / 1000);
   return candidates
     .map(e => ({ ...e, score: scoreEntry(e, prompt, taskId, now) }))
-    .filter(e => e.score > 0)
+    .filter(e => e.score > 1.5)
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
 }
