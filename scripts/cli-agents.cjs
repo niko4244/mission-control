@@ -173,6 +173,7 @@ function runHermes(prompt, options = {}) {
     message: executionResult.message,
     suggested_outcome: classification.suggested_outcome,
     suggestion_reason: classification.suggestion_reason,
+    suggestion_confidence: classification.suggestion_confidence,
   }));
 
   try {
@@ -182,7 +183,7 @@ function runHermes(prompt, options = {}) {
       runId: `hermes-${taskId}-${Date.now()}`,
       tags: 'execution,hermes,mission-control,outcome:unknown',
       confidence: 1,
-      sourceRef: `recall:${recall.length}|suggested:${classification.suggested_outcome}|reason:${classification.suggestion_reason}`,
+      sourceRef: `recall:${recall.length}|suggested:${classification.suggested_outcome}|reason:${classification.suggestion_reason}|confidence:${classification.suggestion_confidence}`,
     });
     console.log('memory entry created');
   } catch (err) {

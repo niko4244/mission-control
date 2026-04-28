@@ -844,7 +844,7 @@ async function run() {
       return;
     }
     if (rawArgs[1] === 'approve-all') {
-      const result = await runLocalBridge('memory:approve-all', rawArgs[2] ? [rawArgs[2]] : []);
+      const result = await runLocalBridge('memory:approve-all', rawArgs.slice(2));
       console.log(JSON.stringify(result));
       return;
     }

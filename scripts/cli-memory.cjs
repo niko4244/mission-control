@@ -254,9 +254,9 @@ function memoryReview(limit) {
   }
 }
 
-function memoryApproveAll(filter) {
+function memoryApproveAll(filter, dryRun = false, confidenceFilter) {
   try {
-    const result = memoryService.approveOutcomes(filter || null);
+    const result = memoryService.approveOutcomes(filter || null, dryRun, confidenceFilter || null);
     console.log(JSON.stringify({ status: 'ok', ...result }));
   } catch (e) {
     console.log(JSON.stringify({ status: 'error', message: e.message }));
@@ -331,7 +331,32 @@ function main() {
     }
     memoryApprove(id);
   } else if (command === 'approve-all') {
-    memoryApproveAll(args[1] || null);
+    const validFilters = ['success', 'failure', 'unknown'];
+    const validConfidence = ['high', 'medium', 'low'];
+    const dryRunIdx = args.indexOf('--dry-run');
+    const dryRun = dryRunIdx > -1;
+
+    // Parse args: approve-all [filter] [confidence] [--dry-run]
+    // filter can be: success|failure|unknown or high|medium|low
+    let filter = null;
+    let confidenceFilter = null;
+
+    // Find first non-flag argument (skip --dry-run position)
+    for (let i = 1; i < args.length; i++) {
+      if (args[i] === '--dry-run') continue;
+      if (validFilters.includes(args[i])) {
+        filter = args[i];
+      } else if (validConfidence.includes(args[i])) {
+        confidenceFilter = args[i];
+      } else {
+        // Unknown arg, treat as filter if not a confidence
+        if (!validConfidence.includes(args[i])) {
+          filter = args[i];
+        }
+      }
+    }
+
+    memoryApproveAll(filter, dryRun, confidenceFilter);
   } else {
     console.log(JSON.stringify({ error: `Unknown command: ${command}` }));
     process.exit(1);

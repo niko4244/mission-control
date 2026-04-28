@@ -171,22 +171,22 @@ function buildExecutionPrompt(prompt, context) {
 
 function classifyOutcome(result) {
   if (!result)
-    return { suggested_outcome: 'unknown', suggestion_reason: 'no_result' };
+    return { suggested_outcome: 'unknown', suggestion_reason: 'no_result', suggestion_confidence: 'low' };
 
   if (result.error || result.status === 'error' || result.status === 'failed')
-    return { suggested_outcome: 'failure', suggestion_reason: 'execution_error' };
+    return { suggested_outcome: 'failure', suggestion_reason: 'execution_error', suggestion_confidence: 'high' };
 
   if (result.status === 'done' || result.status === 'success' || result.status === 'complete')
-    return { suggested_outcome: 'success', suggestion_reason: 'clean_completion' };
+    return { suggested_outcome: 'success', suggestion_reason: 'clean_completion', suggestion_confidence: 'high' };
 
   const msg = (result.message || '').toLowerCase();
   if (/fail|error|exception|crash|timeout|abort/.test(msg))
-    return { suggested_outcome: 'failure', suggestion_reason: 'failure_keyword' };
+    return { suggested_outcome: 'failure', suggestion_reason: 'failure_keyword', suggestion_confidence: 'medium' };
 
   if (/success|complete|done|finish|ok/.test(msg))
-    return { suggested_outcome: 'success', suggestion_reason: 'success_keyword' };
+    return { suggested_outcome: 'success', suggestion_reason: 'success_keyword', suggestion_confidence: 'medium' };
 
-  return { suggested_outcome: 'unknown', suggestion_reason: 'no_signal' };
+  return { suggested_outcome: 'unknown', suggestion_reason: 'no_signal', suggestion_confidence: 'low' };
 }
 
 function getPendingOutcomes(limit = 20) {
@@ -203,11 +203,13 @@ function getPendingOutcomes(limit = 20) {
   return rows.map(r => {
     const sug = (r.source_ref || '').match(/suggested:(\w+)/);
     const rsn = (r.source_ref || '').match(/reason:(\w+)/);
+    const conf = (r.source_ref || '').match(/confidence:(\w+)/);
     return {
       id:                r.id,
       content_preview:   r.content.substring(0, 120),
       suggested_outcome: sug ? sug[1] : null,
       suggestion_reason: rsn ? rsn[1] : null,
+      suggestion_confidence: conf ? conf[1] : null,
       source_ref:        r.source_ref,
       created_at:        r.created_at,
     };
@@ -230,26 +232,36 @@ function getOutcomeSuggestion(id) {
   return { id: row.id, suggested_outcome: match[1] };
 }
 
-function approveOutcomes(filter = null) {
+function approveOutcomes(filter = null, dryRun = false, confidenceFilter = null) {
   const valid = ['success', 'failure', 'unknown'];
   if (filter !== null && !valid.includes(filter))
     throw new Error(`Invalid filter: ${filter}. Must be success | failure | unknown`);
 
+  const validConfidence = ['high', 'medium', 'low'];
+  if (confidenceFilter !== null && !validConfidence.includes(confidenceFilter))
+    throw new Error(`Invalid confidence filter: ${confidenceFilter}. Must be high | medium | low`);
+
   const pending = getPendingOutcomes(1000);
-  const targets = filter ? pending.filter(e => e.suggested_outcome === filter) : pending;
+  const targets = pending.filter(e => {
+    if (filter && e.suggested_outcome !== filter) return false;
+    if (confidenceFilter && e.suggestion_confidence !== confidenceFilter) return false;
+    return true;
+  });
 
   const breakdown = {};
   let applied = 0;
 
   for (const entry of targets) {
     try {
-      markOutcome(entry.id, entry.suggested_outcome);
+      if (!dryRun) {
+        markOutcome(entry.id, entry.suggested_outcome);
+      }
       breakdown[entry.suggested_outcome] = (breakdown[entry.suggested_outcome] || 0) + 1;
       applied++;
     } catch {}
   }
 
-  return { total_processed: targets.length, total_applied: applied, breakdown };
+  return { total_processed: targets.length, total_applied: dryRun ? 0 : applied, breakdown };
 }
 
 module.exports = { writeMemory, queryMemory, memoryStatus, recallMemory, markOutcome, buildContext, buildExecutionPrompt, classifyOutcome, getPendingOutcomes, getOutcomeSuggestion, approveOutcomes };
