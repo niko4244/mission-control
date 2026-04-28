@@ -242,6 +242,33 @@ function memoryOutcome(id, outcome) {
 }
 
 // ============================================================================
+// MEMORY REVIEW / APPROVE
+// ============================================================================
+
+function memoryReview(limit) {
+  try {
+    const entries = memoryService.getPendingOutcomes(Number(limit) || 20);
+    console.log(JSON.stringify({ status: 'ok', pending: entries.length, entries }, null, 2));
+  } catch (e) {
+    console.log(JSON.stringify({ status: 'error', message: e.message }));
+  }
+}
+
+function memoryApprove(id) {
+  try {
+    const suggestion = memoryService.getOutcomeSuggestion(Number(id));
+    if (!suggestion) {
+      console.log(JSON.stringify({ status: 'error', reason: 'not found or not pending' }));
+      return;
+    }
+    const result = memoryService.markOutcome(suggestion.id, suggestion.suggested_outcome);
+    console.log(JSON.stringify({ status: 'ok', ...result, applied: suggestion.suggested_outcome }));
+  } catch (e) {
+    console.log(JSON.stringify({ status: 'error', message: e.message }));
+  }
+}
+
+// ============================================================================
 // MAIN
 // ============================================================================
 
@@ -285,6 +312,15 @@ function main() {
       process.exit(1);
     }
     memoryOutcome(id, outcome);
+  } else if (command === 'review') {
+    memoryReview(args[1]);
+  } else if (command === 'approve') {
+    const id = args[1];
+    if (!id) {
+      console.log(JSON.stringify({ error: 'Usage: approve <id>' }));
+      process.exit(1);
+    }
+    memoryApprove(id);
   } else {
     console.log(JSON.stringify({ error: `Unknown command: ${command}` }));
     process.exit(1);

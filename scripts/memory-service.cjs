@@ -189,4 +189,45 @@ function classifyOutcome(result) {
   return { suggested_outcome: 'unknown', suggestion_reason: 'no_signal' };
 }
 
-module.exports = { writeMemory, queryMemory, memoryStatus, recallMemory, markOutcome, buildContext, buildExecutionPrompt, classifyOutcome };
+function getPendingOutcomes(limit = 20) {
+  const database = getDb();
+  const rows = database.prepare(`
+    SELECT id, content, source_ref, tags, created_at
+    FROM memory_entries
+    WHERE tags     LIKE '%outcome:unknown%'
+      AND source_ref LIKE '%suggested:%'
+    ORDER BY created_at DESC
+    LIMIT ?
+  `).all(limit);
+
+  return rows.map(r => {
+    const sug = (r.source_ref || '').match(/suggested:(\w+)/);
+    const rsn = (r.source_ref || '').match(/reason:(\w+)/);
+    return {
+      id:                r.id,
+      content_preview:   r.content.substring(0, 120),
+      suggested_outcome: sug ? sug[1] : null,
+      suggestion_reason: rsn ? rsn[1] : null,
+      source_ref:        r.source_ref,
+      created_at:        r.created_at,
+    };
+  });
+}
+
+function getOutcomeSuggestion(id) {
+  const database = getDb();
+  const row = database.prepare(
+    'SELECT id, tags, source_ref FROM memory_entries WHERE id = ?'
+  ).get(id);
+
+  if (!row) return null;
+  if (!(row.tags || '').includes('outcome:unknown')) return null;
+  if (!(row.source_ref || '').includes('suggested:')) return null;
+
+  const match = (row.source_ref || '').match(/suggested:(\w+)/);
+  if (!match) return null;
+
+  return { id: row.id, suggested_outcome: match[1] };
+}
+
+module.exports = { writeMemory, queryMemory, memoryStatus, recallMemory, markOutcome, buildContext, buildExecutionPrompt, classifyOutcome, getPendingOutcomes, getOutcomeSuggestion };
