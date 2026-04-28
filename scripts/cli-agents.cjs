@@ -132,11 +132,7 @@ function runHermes(prompt, options = {}) {
 
   const recall = memoryService.recallMemory('hermes', taskId, prompt);
 
-  const context = {
-    successfulPatterns: recall.filter(e => (e.tags || '').includes('outcome:success')),
-    failedPatterns:     recall.filter(e => (e.tags || '').includes('outcome:failure')),
-    neutralContext:     recall.filter(e => !(e.tags || '').includes('outcome:success') && !(e.tags || '').includes('outcome:failure')),
-  };
+  const context = memoryService.buildContext(recall);
   const hasSuccess = context.successfulPatterns.length > 0;
   const hasFailure = context.failedPatterns.length > 0;
 

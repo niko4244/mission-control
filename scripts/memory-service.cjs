@@ -131,4 +131,13 @@ function markOutcome(id, outcome) {
   return { id, outcome, updated: true };
 }
 
-module.exports = { writeMemory, queryMemory, memoryStatus, recallMemory, markOutcome };
+function buildContext(recall) {
+  const tag = e => e.tags || '';
+  return {
+    successfulPatterns: recall.filter(e => tag(e).includes('outcome:success')),
+    failedPatterns:     recall.filter(e => tag(e).includes('outcome:failure')),
+    neutralContext:     recall.filter(e => !tag(e).includes('outcome:success') && !tag(e).includes('outcome:failure')),
+  };
+}
+
+module.exports = { writeMemory, queryMemory, memoryStatus, recallMemory, markOutcome, buildContext };
