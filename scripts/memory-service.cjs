@@ -89,7 +89,8 @@ function scoreEntry(entry, prompt, taskId, now) {
 
   const phraseMatch = haystack.includes(prompt.toLowerCase()) ? 1 : 0;
 
-  return contentMatch * 2 + recency + taskBoost + outcomeWeight + confidenceWeight + phraseMatch;
+  const score = contentMatch * 2 + recency + taskBoost + outcomeWeight + confidenceWeight + phraseMatch;
+  return { score, contentMatch, phraseMatch };
 }
 
 function recallMemory(agent, taskId, prompt, limit = 3) {
@@ -104,8 +105,8 @@ function recallMemory(agent, taskId, prompt, limit = 3) {
 
   const now = Math.floor(Date.now() / 1000);
   return candidates
-    .map(e => ({ ...e, score: scoreEntry(e, prompt, taskId, now) }))
-    .filter(e => e.score > 1.5)
+    .map(e => ({ ...e, ...scoreEntry(e, prompt, taskId, now) }))
+    .filter(e => (e.contentMatch > 0 || e.phraseMatch > 0) && e.score > 1.5)
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
 }
