@@ -842,7 +842,8 @@ async function run() {
   if (rawArgs[0] === 'agents' && rawArgs[1] === 'run' && rawArgs[2] === 'hermes') {
     const taskIdx = rawArgs.indexOf('--task');
     const taskId = taskIdx > -1 ? rawArgs[taskIdx + 1] : null;
-    const result = await runLocalBridge('agents:run', taskId ? ['--task', taskId] : []);
+    const prompt = taskIdx > -1 ? rawArgs.slice(taskIdx + 2).join(' ') : rawArgs.slice(3).join(' ');
+    const result = await runLocalBridge('agents:run', taskId ? ['--task', taskId, prompt] : []);
     console.log(JSON.stringify(result));
     return;
   }
