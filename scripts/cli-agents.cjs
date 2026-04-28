@@ -4,6 +4,7 @@
  */
 
 const path = require('node:path');
+const memoryService = require('./memory-service.cjs');
 
 
 const HOMEDIR = process.env.HOME || process.env.USERPROFILE || '';
@@ -153,16 +154,8 @@ function runHermes(prompt, options = {}) {
   }));
 
   try {
-    const { spawnSync } = require('child_process');
-    const memoryCliPath = path.join(MISSION_CONTROL_DIR, 'scripts', 'cli-memory.cjs');
-    const result = spawnSync('node', [memoryCliPath, 'write', 'hermes', 'execution', prompt || 'no prompt'], {
-      encoding: 'utf-8'
-    });
-    if (result.status === 0) {
-      console.log('memory entry created');
-    } else {
-      console.error('memory write failed:', result.stderr);
-    }
+    memoryService.writeMemory('hermes', 'execution', prompt || 'no prompt');
+    console.log('memory entry created');
   } catch (err) {
     console.error('memory write failed:', err.message);
   }

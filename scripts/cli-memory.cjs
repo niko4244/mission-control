@@ -14,6 +14,8 @@ const fs = require('node:fs');
 const https = require('node:https');
 const http = require('node:http');
 
+const memoryService = require('./memory-service.cjs');
+
 // ============================================================================
 // CONFIG
 // ============================================================================
@@ -42,28 +44,7 @@ function getDb() {
 
 function memoryStatus() {
   try {
-    const database = getDb();
-    
-    // Check if table exists
-    const tables = database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='memory_entries'").all();
-    if (tables.length === 0) {
-      console.log(JSON.stringify({ status: 'table_not_exists' }));
-      return { status: 'table_not_exists' };
-    }
-    
-    // Get counts by source
-    const sourceCounts = database.prepare('SELECT source, COUNT(*) as cnt FROM memory_entries GROUP BY source').all();
-    const total = database.prepare('SELECT COUNT(*) as total FROM memory_entries').get();
-    const recent = database.prepare('SELECT created_at FROM memory_entries ORDER BY created_at DESC LIMIT 1').get();
-    
-    const result = {
-      status: 'ok',
-      table_exists: true,
-      total: total.total,
-      by_source: sourceCounts,
-      last_sync: recent ? recent.created_at : null
-    };
-    
+    const result = memoryService.memoryStatus();
     console.log(JSON.stringify(result, null, 2));
     return result;
   } catch (e) {
@@ -208,13 +189,9 @@ function memorySync(options = {}) {
 
 function memoryWrite(source, category, content) {
   try {
-    const database = getDb();
-    const result = database.prepare(`
-      INSERT INTO memory_entries (source, category, content, created_at, updated_at)
-      VALUES (?, ?, ?, unixepoch(), unixepoch())
-    `).run(source, category, content);
-    console.log(JSON.stringify({ status: 'ok', id: result.lastInsertRowid }));
-    return { id: result.lastInsertRowid };
+    const result = memoryService.writeMemory(source, category, content);
+    console.log(JSON.stringify({ status: 'ok', id: result.id }));
+    return result;
   } catch (e) {
     console.log(JSON.stringify({ status: 'error', message: e.message }));
     return null;
@@ -227,15 +204,7 @@ function memoryWrite(source, category, content) {
 
 function memoryQuery(searchTerm) {
   try {
-    const database = getDb();
-    
-    const rows = database.prepare(`
-      SELECT * FROM memory_entries 
-      WHERE content LIKE ? OR tags LIKE ?
-      ORDER BY created_at DESC
-      LIMIT 20
-    `).all(`%${searchTerm}%`, `%${searchTerm}%`);
-    
+    const rows = memoryService.queryMemory(searchTerm);
     const result = {
       query: searchTerm,
       results: rows.length,
@@ -247,7 +216,6 @@ function memoryQuery(searchTerm) {
         created_at: r.created_at
       }))
     };
-    
     console.log(JSON.stringify(result, null, 2));
     return result;
   } catch (e) {
