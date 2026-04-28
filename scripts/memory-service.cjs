@@ -169,4 +169,24 @@ function buildExecutionPrompt(prompt, context) {
   return lines.join('\n');
 }
 
-module.exports = { writeMemory, queryMemory, memoryStatus, recallMemory, markOutcome, buildContext, buildExecutionPrompt };
+function classifyOutcome(result) {
+  if (!result)
+    return { suggested_outcome: 'unknown', suggestion_reason: 'no_result' };
+
+  if (result.error || result.status === 'error' || result.status === 'failed')
+    return { suggested_outcome: 'failure', suggestion_reason: 'execution_error' };
+
+  if (result.status === 'done' || result.status === 'success' || result.status === 'complete')
+    return { suggested_outcome: 'success', suggestion_reason: 'clean_completion' };
+
+  const msg = (result.message || '').toLowerCase();
+  if (/fail|error|exception|crash|timeout|abort/.test(msg))
+    return { suggested_outcome: 'failure', suggestion_reason: 'failure_keyword' };
+
+  if (/success|complete|done|finish|ok/.test(msg))
+    return { suggested_outcome: 'success', suggestion_reason: 'success_keyword' };
+
+  return { suggested_outcome: 'unknown', suggestion_reason: 'no_signal' };
+}
+
+module.exports = { writeMemory, queryMemory, memoryStatus, recallMemory, markOutcome, buildContext, buildExecutionPrompt, classifyOutcome };

@@ -163,11 +163,16 @@ function runHermes(prompt, options = {}) {
     `).run(taskId);
   } catch {}
 
+  const executionResult = { status: 'done', message: 'Hermes execution complete (simulated)' };
+  const classification = memoryService.classifyOutcome(executionResult);
+
   console.log(JSON.stringify({
     status: 'done',
     agent,
     task_id: taskId,
-    message: 'Hermes execution complete (simulated)'
+    message: executionResult.message,
+    suggested_outcome: classification.suggested_outcome,
+    suggestion_reason: classification.suggestion_reason,
   }));
 
   try {
@@ -177,7 +182,7 @@ function runHermes(prompt, options = {}) {
       runId: `hermes-${taskId}-${Date.now()}`,
       tags: 'execution,hermes,mission-control,outcome:unknown',
       confidence: 1,
-      sourceRef: `recall:${recall.length}`,
+      sourceRef: `recall:${recall.length}|suggested:${classification.suggested_outcome}|reason:${classification.suggestion_reason}`,
     });
     console.log('memory entry created');
   } catch (err) {
