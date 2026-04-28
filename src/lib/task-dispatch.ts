@@ -5,6 +5,7 @@ import { eventBus } from './event-bus'
 import { logger } from './logger'
 import { config } from './config'
 import { syncTaskOutbound } from './github-sync-engine'
+import { inferTaskWorkloadProfile } from './task-routing'
 
 /** Sync task to GitHub/GNAP and broadcast escalation if task failed */
 function syncAndEscalateIfFailed(task: { id: number; title: string; status: string; priority: string; project_id?: number | null; workspace_id: number; description?: string | null }, newStatus: string, errorMsg?: string, dispatchAttempts?: number): void {
@@ -887,15 +888,41 @@ export async function dispatchAssignedTasks(): Promise<{ ok: boolean; message: s
 /** Role affinity mapping — which task keywords match which agent roles. */
 const ROLE_AFFINITY: Record<string, string[]> = {
   coder: ['code', 'implement', 'build', 'fix', 'bug', 'test', 'unit test', 'refactor', 'feature', 'api', 'endpoint', 'function', 'class', 'module', 'component', 'deploy', 'ci', 'pipeline'],
+  developer: ['code', 'implement', 'build', 'fix', 'bug', 'test', 'unit test', 'refactor', 'feature', 'api', 'endpoint', 'function', 'class', 'module', 'component', 'deploy', 'ci', 'pipeline'],
   researcher: ['research', 'investigate', 'analyze', 'compare', 'find', 'discover', 'audit', 'review', 'survey', 'benchmark', 'evaluate', 'assess', 'competitor', 'market', 'trend'],
   reviewer: ['review', 'audit', 'check', 'verify', 'validate', 'quality', 'security', 'compliance', 'approve'],
   tester: ['test', 'qa', 'e2e', 'integration test', 'regression', 'coverage', 'verify', 'validate'],
   devops: ['deploy', 'infrastructure', 'ci', 'cd', 'docker', 'kubernetes', 'monitoring', 'pipeline', 'server', 'nginx', 'ssl'],
   assistant: ['write', 'draft', 'summarize', 'translate', 'format', 'document', 'docs', 'readme', 'email', 'message', 'report'],
+  orchestrator: ['route', 'routing', 'mixed', 'coordinate', 'lookup', 'research', 'product', 'image', 'code'],
+  strategist: ['product', 'mvp', 'feature', 'spec', 'go-to-market', 'gtm', 'wedge', 'concept', 'roadmap'],
+  'content-creator': ['content', 'write', 'prompt', 'image', 'visual', 'hero image', 'art direction', 'draft'],
+  'specialist-dev': ['code', 'debug', 'implementation', 'api', 'component', 'test'],
   agent: [], // generic fallback
 }
 
-function scoreAgentForTask(
+function normalizeAgentRole(role: string | null | undefined): string {
+  return String(role || '').trim().toLowerCase()
+}
+
+function parseAgentConfig(configText: string | null): Record<string, unknown> {
+  if (!configText) return {}
+  try {
+    const parsed = JSON.parse(configText)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {}
+  } catch {
+    return {}
+  }
+}
+
+function toStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.filter(v => typeof v === 'string').map(v => v.toLowerCase())
+}
+
+export function scoreAgentForTask(
   agent: { name: string; role: string; status: string; config: string | null },
   taskText: string,
 ): number {
@@ -903,7 +930,10 @@ function scoreAgentForTask(
   if (agent.status === 'offline' || agent.status === 'error' || agent.status === 'sleeping') return -1
 
   const text = taskText.toLowerCase()
-  const keywords = ROLE_AFFINITY[agent.role] || []
+  const role = normalizeAgentRole(agent.role)
+  const keywords = ROLE_AFFINITY[role] || []
+  const profile = inferTaskWorkloadProfile({ title: taskText })
+  const cfg = parseAgentConfig(agent.config)
 
   let score = 0
   // Role keyword match
@@ -911,18 +941,40 @@ function scoreAgentForTask(
     if (text.includes(kw)) score += 10
   }
 
+  if (profile.recommendedAgentRoles.includes(role)) {
+    score += 30
+  }
+
+  if (role === 'orchestrator' && profile.secondaryLanes.length > 0) {
+    score += 20
+  }
+
   // Idle agents get a bonus (prefer agents not currently busy)
   if (agent.status === 'idle') score += 5
 
   // Check agent capabilities from config
-  if (agent.config) {
-    try {
-      const cfg = JSON.parse(agent.config)
-      const caps = Array.isArray(cfg.capabilities) ? cfg.capabilities : []
-      for (const cap of caps) {
-        if (typeof cap === 'string' && text.includes(cap.toLowerCase())) score += 15
-      }
-    } catch { /* ignore */ }
+  const configStrings = [
+    ...toStringArray(cfg.capabilities),
+    ...toStringArray(cfg.skills),
+    ...toStringArray(cfg.abilities),
+    ...toStringArray(cfg.functions),
+    ...toStringArray(cfg.workloadLanes),
+  ]
+  for (const cap of configStrings) {
+    if (text.includes(cap)) score += 15
+    if (profile.recommendedSkills.includes(cap)) score += 12
+    if (profile.recommendedAbilities.includes(cap)) score += 12
+    if (profile.recommendedFunctions.includes(cap)) score += 12
+  }
+
+  const tools = new Set([
+    ...toStringArray((cfg.tools as Record<string, unknown> | undefined)?.allow),
+    ...toStringArray(cfg.toolAccess),
+  ])
+  if (profile.needsFreshnessCheck && (tools.has('web') || tools.has('browser'))) score += 12
+  if (profile.needsCodeTools && (tools.has('read') || tools.has('write') || tools.has('exec'))) score += 12
+  if (profile.needsImageTool && (role === 'content-creator' || configStrings.includes('image_prompting') || configStrings.includes('visual_direction'))) {
+    score += 12
   }
 
   // Any non-offline agent gets at least 1 (can be a fallback)
