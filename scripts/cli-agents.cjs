@@ -132,12 +132,28 @@ function runHermes(prompt, options = {}) {
 
   const recall = memoryService.recallMemory('hermes', taskId, prompt);
 
+  const context = {
+    successfulPatterns: recall.filter(e => (e.tags || '').includes('outcome:success')),
+    failedPatterns:     recall.filter(e => (e.tags || '').includes('outcome:failure')),
+    neutralContext:     recall.filter(e => !(e.tags || '').includes('outcome:success') && !(e.tags || '').includes('outcome:failure')),
+  };
+  const hasSuccess = context.successfulPatterns.length > 0;
+  const hasFailure = context.failedPatterns.length > 0;
+
   console.log(JSON.stringify({
     status: 'executing',
     agent,
     task_id: taskId,
     prompt: String(prompt || '').substring(0, 100),
     recall_count: recall.length,
+    context_summary: {
+      successful: context.successfulPatterns.length,
+      failed:     context.failedPatterns.length,
+      neutral:    context.neutralContext.length,
+    },
+    decision_hint: hasSuccess ? 'bias_to_success'
+      : hasFailure ? 'avoid_failure_pattern'
+      : 'no_prior_signal',
   }));
 
   try {
