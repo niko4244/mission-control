@@ -133,6 +133,7 @@ function runHermes(prompt, options = {}) {
   const recall = memoryService.recallMemory('hermes', taskId, prompt);
 
   const context = memoryService.buildContext(recall);
+  const executionPrompt = memoryService.buildExecutionPrompt(prompt, context);
   const hasSuccess = context.successfulPatterns.length > 0;
   const hasFailure = context.failedPatterns.length > 0;
 
@@ -150,6 +151,7 @@ function runHermes(prompt, options = {}) {
     decision_hint: hasSuccess ? 'bias_to_success'
       : hasFailure ? 'avoid_failure_pattern'
       : 'no_prior_signal',
+    execution_prompt_preview: executionPrompt.substring(0, 400),
   }));
 
   try {

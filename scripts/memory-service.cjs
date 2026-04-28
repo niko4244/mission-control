@@ -140,4 +140,31 @@ function buildContext(recall) {
   };
 }
 
-module.exports = { writeMemory, queryMemory, memoryStatus, recallMemory, markOutcome, buildContext };
+function buildExecutionPrompt(prompt, context) {
+  const lines = [];
+
+  if (context.successfulPatterns.length > 0) {
+    lines.push('[MEMORY CONTEXT]');
+    lines.push('REUSE (prior success):');
+    context.successfulPatterns.forEach(e =>
+      lines.push(`  - ${e.content} (score: ${e.score != null ? e.score.toFixed(2) : 'n/a'})`));
+  }
+  if (context.failedPatterns.length > 0) {
+    if (!lines.length) lines.push('[MEMORY CONTEXT]');
+    lines.push('AVOID (prior failure):');
+    context.failedPatterns.forEach(e =>
+      lines.push(`  - ${e.content} (score: ${e.score != null ? e.score.toFixed(2) : 'n/a'})`));
+  }
+  if (context.neutralContext.length > 0) {
+    if (!lines.length) lines.push('[MEMORY CONTEXT]');
+    lines.push('REFERENCE (neutral):');
+    context.neutralContext.forEach(e =>
+      lines.push(`  - ${e.content} (score: ${e.score != null ? e.score.toFixed(2) : 'n/a'})`));
+  }
+
+  if (lines.length) lines.push('');
+  lines.push(`[CURRENT TASK]: ${prompt}`);
+  return lines.join('\n');
+}
+
+module.exports = { writeMemory, queryMemory, memoryStatus, recallMemory, markOutcome, buildContext, buildExecutionPrompt };
