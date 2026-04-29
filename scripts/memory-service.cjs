@@ -276,7 +276,14 @@ function scoreEntry(entry, prompt, taskId, now, allEntries = []) {
     causalityScore < 0.3 ? -2 :
     0;
 
-  const finalScore = score + learningQualityBoost + failureBoost + successDampening + promotionBoost + demotionPenalty + clusterBoost + validationPenalty + causalityBoost;
+  // Competing Pattern Evaluation: track which pattern performs better
+  const winRate = getWinRate(entry);
+  const competitionBoost =
+    winRate > 0.7 ? 1.5 :
+    winRate < 0.4 ? -1 :
+    0;
+
+  const finalScore = score + learningQualityBoost + failureBoost + successDampening + promotionBoost + demotionPenalty + clusterBoost + validationPenalty + causalityBoost + competitionBoost;
 
   // Block unsafe patterns: force demotion if validation score indicates unsafe content
   let forceDemote = false;
@@ -308,7 +315,9 @@ function scoreEntry(entry, prompt, taskId, now, allEntries = []) {
     is_failure_memory: isFailureMemory,
     force_demoted: forceDemote,
     causality_score: causalityScore,
-    causality_boost: causalityBoost
+    causality_boost: causalityBoost,
+    win_rate: winRate,
+    competition_boost: competitionBoost
   };
 }
 
@@ -333,7 +342,7 @@ function getDemotionPenaltyWithCounts(successCount, failureCount) {
   return 0;
 }
 
-function recallMemory(agent, taskId, prompt, limit = 3) {
+function recallMemory(agent, taskId, prompt, runId = null, limit = 3) {
   const database = getDb();
   const candidates = database.prepare(`
     SELECT id, content, agent, task_id, tags, confidence, created_at, source_ref
@@ -359,10 +368,21 @@ function recallMemory(agent, taskId, prompt, limit = 3) {
     e.use_order = i + 1;
   });
 
-  return selected;
+  return { selected, usedPatterns, runId };
 }
 
-function markOutcome(id, outcome) {
+function getWinRate(entry) {
+  const sourceRef = entry.source_ref || '';
+
+  const wins = (sourceRef.match(/pattern_win:\+1/g) || []).length;
+  const losses = (sourceRef.match(/pattern_loss:\+1/g) || []).length;
+
+  if (wins + losses === 0) return 0.5;
+
+  return wins / (wins + losses);
+}
+
+function markOutcome(id, outcome, runId = null) {
   const valid = ['success', 'failure', 'unknown'];
   if (!valid.includes(outcome)) throw new Error(`Invalid outcome: ${outcome}`);
 
@@ -388,6 +408,29 @@ function markOutcome(id, outcome) {
       // Check if applied_pattern signal already exists to avoid duplicates
       if (!updatedSourceRef.includes('applied_pattern:')) {
         updatedSourceRef = `${updatedSourceRef}|applied_pattern:+1`;
+      }
+    }
+
+    // Track competing group for causality evaluation
+    // Mark all patterns considered in this run as competing
+    if (runId && !updatedSourceRef.includes(`competing_group:${runId}`)) {
+      updatedSourceRef = `${updatedSourceRef}|competing_group:${runId}`;
+    }
+
+    // Track winner/loser for competition tracking
+    // The winning pattern (selected/used) gets win/loss signal
+    const isWinningPattern = isUsedPattern;
+    if (isWinningPattern) {
+      if (outcome === 'success') {
+        // Winner gets win
+        if (!updatedSourceRef.includes('pattern_win:')) {
+          updatedSourceRef = `${updatedSourceRef}|pattern_win:+1`;
+        }
+      } else if (outcome === 'failure') {
+        // Winner gets loss (it was used but failed)
+        if (!updatedSourceRef.includes('pattern_loss:')) {
+          updatedSourceRef = `${updatedSourceRef}|pattern_loss:+1`;
+        }
       }
     }
 
@@ -637,5 +680,6 @@ module.exports = {
   getPromotionLevelWithCounts,
   getDemotionPenaltyWithCounts,
   tokenize,
-  getPatternSimilarity
+  getPatternSimilarity,
+  getWinRate
 };
