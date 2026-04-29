@@ -89,14 +89,20 @@ function scoreEntry(entry, prompt, taskId, now) {
 
   const phraseMatch = haystack.includes(prompt.toLowerCase()) ? 1 : 0;
 
-  const score = contentMatch * 2 + recency + taskBoost + outcomeWeight + confidenceWeight + phraseMatch;
-  return { score, contentMatch, phraseMatch };
+  // Aggregate confidence score from source_ref history
+  const sourceRef = entry.source_ref || '';
+  const plusMatches = (sourceRef.match(/confidence_adjusted:\+1/g) || []).length;
+  const minusMatches = (sourceRef.match(/confidence_adjusted:\-1/g) || []).length;
+  const confidenceScore = plusMatches - minusMatches;
+
+  const score = contentMatch * 2 + recency + taskBoost + outcomeWeight + confidenceWeight + phraseMatch + (confidenceScore * 0.3);
+  return { score, contentMatch, phraseMatch, confidence_score: confidenceScore };
 }
 
 function recallMemory(agent, taskId, prompt, limit = 3) {
   const database = getDb();
   const candidates = database.prepare(`
-    SELECT id, content, agent, task_id, tags, confidence, created_at
+    SELECT id, content, agent, task_id, tags, confidence, created_at, source_ref
     FROM memory_entries
     WHERE source = ? AND category = 'execution'
     ORDER BY created_at DESC
