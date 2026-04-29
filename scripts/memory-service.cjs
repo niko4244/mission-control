@@ -185,7 +185,7 @@ function memoryStatus() {
   };
 }
 
-function scoreEntry(entry, prompt, taskId, now) {
+function scoreEntry(entry, prompt, taskId, now, allEntries = []) {
   const stopwords = new Set([
     'the','is','and','to','a','of','in','for','on','with','test','memory'
   ]);
@@ -234,12 +234,38 @@ function scoreEntry(entry, prompt, taskId, now) {
   // Success dampening for anti-pattern priority
   const successDampening = !isFailureMemory && /success|fixed|resolved/i.test(entry.content) ? -0.5 : 0;
 
-  // Promotion level system (dynamic based on usage signals)
-  const promotionLevel = getPromotionLevel(entry);
-  const promotionBoost = getPromotionBoost(promotionLevel);
-  const demotionPenalty = getDemotionPenalty(entry);
+  // Pattern similarity clustering
+  const similarEntries = allEntries.filter(e => {
+    if (e.id === entry.id) return false;
+    return getPatternSimilarity(entry, e) > 0.6;
+  });
 
-  const finalScore = score + learningQualityBoost + failureBoost + successDampening + promotionBoost + demotionPenalty;
+  const clusterSize = similarEntries.length + 1;
+
+  // Aggregate cluster counts
+  const clusterSuccessCount =
+    successCount +
+    similarEntries.reduce((sum, e) =>
+      sum + ((e.source_ref.match(/pattern_success:\+1/g) || []).length),
+    0);
+
+  const clusterFailureCount =
+    failureCount +
+    similarEntries.reduce((sum, e) =>
+      sum + ((e.source_ref.match(/pattern_failure:\+1/g) || []).length),
+    0);
+
+  // Promotion level system (dynamic based on cluster counts)
+  const clusterPromotionLevel = getPromotionLevelWithCounts(clusterSuccessCount, clusterFailureCount);
+  const promotionBoost = getPromotionBoost(clusterPromotionLevel);
+
+  // Demotion penalty based on cluster counts
+  const demotionPenalty = getDemotionPenaltyWithCounts(clusterSuccessCount, clusterFailureCount);
+
+  // Cluster boost
+  const clusterBoost = Math.min(2, clusterSize * 0.5);
+
+  const finalScore = score + learningQualityBoost + failureBoost + successDampening + promotionBoost + demotionPenalty + clusterBoost;
 
   return {
     score: finalScore,
@@ -251,13 +277,38 @@ function scoreEntry(entry, prompt, taskId, now) {
     learning_quality_boost: learningQualityBoost,
     failure_boost: failureBoost,
     success_dampening: successDampening,
-    promotion_level: promotionLevel,
+    promotion_level: clusterPromotionLevel,
     promotion_boost: promotionBoost,
     demotion_penalty: demotionPenalty,
-    success_count: (sourceRef.match(/pattern_success:\+1/g) || []).length,
-    failure_count: (sourceRef.match(/pattern_failure:\+1/g) || []).length,
+    success_count: clusterSuccessCount,
+    failure_count: clusterFailureCount,
+    cluster_size: clusterSize,
+    cluster_success_count: clusterSuccessCount,
+    cluster_failure_count: clusterFailureCount,
+    similarity_matches: similarEntries.length,
     is_failure_memory: isFailureMemory
   };
+}
+
+function getPromotionLevelWithCounts(successCount, failureCount) {
+  // Demote if failures >= successes AND at least 2 failures
+  if (failureCount >= successCount && failureCount >= 2) return 'observation';
+
+  // Promote based on cluster success count
+  if (successCount >= 5 && failureCount === 0) return 'core_rule';
+  if (successCount >= 3 && failureCount === 0) return 'validated_pattern';
+  if (successCount >= 2) return 'candidate_pattern';
+
+  return 'observation';
+}
+
+function getDemotionPenaltyWithCounts(successCount, failureCount) {
+  // Apply demotion penalty if failures outnumber successes
+  if (failureCount > successCount) {
+    return -2;
+  }
+
+  return 0;
 }
 
 function recallMemory(agent, taskId, prompt, limit = 3) {
@@ -272,7 +323,7 @@ function recallMemory(agent, taskId, prompt, limit = 3) {
 
   const now = Math.floor(Date.now() / 1000);
   return candidates
-    .map(e => ({ ...e, ...scoreEntry(e, prompt, taskId, now) }))
+    .map(e => ({ ...e, ...scoreEntry(e, prompt, taskId, now, candidates) }))
     .filter(e => (e.contentMatch > 0 || e.phraseMatch > 0) && e.score > 1.5)
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
@@ -291,16 +342,12 @@ function markOutcome(id, outcome) {
     ? current.replace(/outcome:\w+/, `outcome:${outcome}`)
     : `${current},outcome:${outcome}`;
 
-  // Track usage signals in source_ref
+  // Track usage signals in source_ref (always accumulate)
   let updatedSourceRef = row.source_ref;
   if (updatedSourceRef) {
     // Append pattern usage signal
     const signal = outcome === 'success' ? 'pattern_success:+1' : 'pattern_failure:+1';
-
-    // Check if signal already exists to avoid duplicates
-    if (!updatedSourceRef.includes(`pattern_${outcome}:+1`)) {
-      updatedSourceRef = `${updatedSourceRef}|${signal}`;
-    }
+    updatedSourceRef = `${updatedSourceRef}|${signal}`;
 
     // Confidence correction: compare suggested outcome with actual outcome
     const suggestedMatch = updatedSourceRef.match(/suggested:(\w+)/);
@@ -345,46 +392,31 @@ function getLearningQualityBoost(entry) {
   return boost - riskPenalty;
 }
 
-function getPromotionLevel(entry) {
-  const sourceRef = entry.source_ref || '';
-  const tags = entry.tags || '';
-
-  // Compute counts dynamically from source_ref
-  const successCount = (sourceRef.match(/pattern_success:\+1/g) || []).length;
-  const failureCount = (sourceRef.match(/pattern_failure:\+1/g) || []).length;
-
-  // Demote if multiple failures observed
-  if (failureCount >= 2) return 'observation';
-
-  // Promote based on success count
-  if (successCount >= 5 && failureCount === 0) return 'core_rule';
-  if (successCount >= 3 && failureCount === 0) return 'validated_pattern';
-  if (successCount >= 2) return 'candidate_pattern';
-
-  return 'observation';
+// Pattern similarity clustering
+function tokenize(text) {
+  return new Set(
+    (text || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, '')
+      .split(/\s+/)
+      .filter(t => t.length > 2)
+  );
 }
 
-function getPromotionBoost(level) {
-  switch (level) {
-    case 'core_rule': return 3;
-    case 'validated_pattern': return 1.5;
-    case 'candidate_pattern': return 0.5;
-    case 'observation':
-    default: return 0;
-  }
-}
+function getPatternSimilarity(a, b) {
+  const tokensA = tokenize(a.content);
+  const tokensB = tokenize(b.content);
 
-function getDemotionPenalty(entry) {
-  const sourceRef = entry.source_ref || '';
-  const successCount = (sourceRef.match(/pattern_success:\+1/g) || []).length;
-  const failureCount = (sourceRef.match(/pattern_failure:\+1/g) || []).length;
+  if (tokensA.size === 0 || tokensB.size === 0) return 0;
 
-  // Apply demotion penalty if failures outnumber successes
-  if (failureCount > successCount) {
-    return -2;
+  let overlap = 0;
+  for (const t of tokensA) {
+    if (tokensB.has(t)) overlap++;
   }
 
-  return 0;
+  const union = new Set([...tokensA, ...tokensB]).size;
+
+  return overlap / union;
 }
 
 function buildContext(recall) {
@@ -538,5 +570,9 @@ module.exports = {
   patternToString,
   getPromotionLevel,
   getPromotionBoost,
-  getDemotionPenalty
+  getDemotionPenalty,
+  getPromotionLevelWithCounts,
+  getDemotionPenaltyWithCounts,
+  tokenize,
+  getPatternSimilarity
 };
