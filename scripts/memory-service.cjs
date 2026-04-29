@@ -265,7 +265,16 @@ function scoreEntry(entry, prompt, taskId, now, allEntries = []) {
   // Cluster boost
   const clusterBoost = Math.min(2, clusterSize * 0.5);
 
-  const finalScore = score + learningQualityBoost + failureBoost + successDampening + promotionBoost + demotionPenalty + clusterBoost;
+  const validationScore = getValidationScore(entry);
+  const validationPenalty = validationScore < 0 ? validationScore * 2 : 0;
+
+  const finalScore = score + learningQualityBoost + failureBoost + successDampening + promotionBoost + demotionPenalty + clusterBoost + validationPenalty;
+
+  // Block unsafe patterns: force demotion if validation score indicates unsafe content
+  let forceDemote = false;
+  if (validationScore <= -2) {
+    forceDemote = true;
+  }
 
   return {
     score: finalScore,
@@ -277,16 +286,19 @@ function scoreEntry(entry, prompt, taskId, now, allEntries = []) {
     learning_quality_boost: learningQualityBoost,
     failure_boost: failureBoost,
     success_dampening: successDampening,
-    promotion_level: clusterPromotionLevel,
+    promotion_level: forceDemote ? 'observation' : clusterPromotionLevel,
     promotion_boost: promotionBoost,
-    demotion_penalty: demotionPenalty,
+    demotion_penalty: forceDemote ? -10 : demotionPenalty,
+    validation_score: validationScore,
+    validation_penalty: validationPenalty,
     success_count: clusterSuccessCount,
     failure_count: clusterFailureCount,
     cluster_size: clusterSize,
     cluster_success_count: clusterSuccessCount,
     cluster_failure_count: clusterFailureCount,
     similarity_matches: similarEntries.length,
-    is_failure_memory: isFailureMemory
+    is_failure_memory: isFailureMemory,
+    force_demoted: forceDemote
   };
 }
 
@@ -392,16 +404,24 @@ function getLearningQualityBoost(entry) {
   return boost - riskPenalty;
 }
 
-// Pattern similarity clustering
-function tokenize(text) {
-  return new Set(
-    (text || '')
-      .toLowerCase()
-      .replace(/[^a-z0-9\s]/g, '')
-      .split(/\s+/)
-      .filter(t => t.length > 2)
-  );
+// Pattern Validation Gate: assess pattern credibility
+function getValidationScore(entry) {
+  const content = entry.content || '';
+
+  let score = 0;
+
+  // Positive signals
+  if (/tested|verified|confirmed|validated/i.test(content)) score += 2;
+  if (/repeated|consistent/i.test(content)) score += 1;
+
+  // Negative signals
+  if (/temporary|workaround|hack|quick fix/i.test(content)) score -= 2;
+  if (/uncertain|guess|maybe|likely/i.test(content)) score -= 1;
+
+  return score;
 }
+
+// Pattern similarity clustering
 
 function getPatternSimilarity(a, b) {
   const tokensA = tokenize(a.content);
