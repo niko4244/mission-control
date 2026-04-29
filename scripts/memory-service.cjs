@@ -83,15 +83,15 @@ function getPatternSimilarity(a, b) {
 
 // Signal counting helper - centralized for all signal tracking
 function getSignalCounts(sourceRef) {
-  const sourceRef = sourceRef || '';
+  const sr = sourceRef || '';
   return {
-    successCount: (sourceRef.match(/pattern_success:\+1/g) || []).length,
-    failureCount: (sourceRef.match(/pattern_failure:\+1/g) || []).length,
-    appliedCount: (sourceRef.match(/applied_pattern:\+1/g) || []).length,
-    winCount: (sourceRef.match(/pattern_win:\+1/g) || []).length,
-    lossCount: (sourceRef.match(/pattern_loss:\+1/g) || []).length,
-    competingGroups: (sourceRef.match(/competing_group:/g) || []).length,
-    totalOutcomeCount: (sourceRef.match(/pattern_(success|failure):\+1/g) || []).length,
+    successCount: (sr.match(/pattern_success:\+1/g) || []).length,
+    failureCount: (sr.match(/pattern_failure:\+1/g) || []).length,
+    appliedCount: (sr.match(/applied_pattern:\+1/g) || []).length,
+    winCount: (sr.match(/pattern_win:\+1/g) || []).length,
+    lossCount: (sr.match(/pattern_loss:\+1/g) || []).length,
+    competingGroups: (sr.match(/competing_group:/g) || []).length,
+    totalOutcomeCount: (sr.match(/pattern_(success|failure):\+1/g) || []).length,
   };
 }
 
@@ -154,7 +154,7 @@ function getPromotionLevelWithCounts(successCount, failureCount, forceDemote = f
 function getPromotionBoost(level) {
   switch (level) {
     case 'core_rule': return 3;
-    case 'validated_pattern': return 1.5;
+    case 'validated_pattern': return 2;
     case 'candidate_pattern': return 0.5;
     default: return 0;
   }
@@ -184,7 +184,7 @@ function getCausalityScore(successCount, appliedCount) {
 // Validation penalty with cluster aggregation
 function getValidationPenalty(clusterValidationScore) {
   if (clusterValidationScore >= 0) return 0;
-  return clusterValidationScore * 1.2;
+  return clusterValidationScore * 1.1;
 }
 
 // Learning quality boost - metadata defaults to zero (no boost without metadata)
@@ -427,7 +427,7 @@ function scoreEntry(entry, prompt, taskId, now, allEntries = []) {
 
   // Confidence-aware failure boost
   const failureBoost = isFailureMemory
-    ? 1 + Math.min(3, Math.abs(confidenceScore))
+    ? 0.5 + Math.min(2, Math.abs(confidenceScore))
     : 0;
 
   // Success dampening for anti-pattern priority
@@ -500,7 +500,7 @@ function scoreEntry(entry, prompt, taskId, now, allEntries = []) {
     causalityScore = getCausalityScore(clusterSuccessCount, clusterAppliedCount);
     // Only apply causality boost for moderate-to-high causality
     if (causalityScore > 0.5) {
-      causalityBoost = (causalityScore - 0.5) * 4;
+      causalityBoost = (causalityScore - 0.5) * 3;
     }
   }
 
@@ -877,12 +877,14 @@ module.exports = {
   getOutcomeSuggestion,
   approveOutcomes,
   getLearningQuality,
+  scoreEntry,
   getLearningQualityBoost,
   generateMemoryPattern,
   patternToString,
   getPromotionLevelWithCounts,
   getPromotionBoost,
   getDemotionPenaltyWithCounts,
+  getValidationPenalty,
   tokenize,
   getPatternSimilarity,
   getValidationScore,
