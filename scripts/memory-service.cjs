@@ -25,61 +25,85 @@ function getDb() {
 function writeMemory(source, category, content, meta = {}) {
   const { taskId = null, agent = null, runId = null, tags = null, confidence = null, sourceRef = null, project = null, rawExecutionLog = false } = meta;
 
-  // Generate pattern from raw execution log if requested
-  let finalContent = content;
-  let finalTags = tags;
-  let finalSourceRef = sourceRef;
-
-  if (rawExecutionLog || content.trim().startsWith('#') || content.trim().startsWith('*')) {
-    // Content appears to be a raw execution log - generate pattern
+  // Generate pattern only when explicitly requested (no heuristics)
+  if (rawExecutionLog === true) {
     const pattern = generateMemoryPattern(content);
-    finalContent = patternToString(pattern);
-    finalTags = pattern.generalized_pattern || (pattern.anti_patterns ? 'avoid:' + pattern.anti_patterns[0] : '');
-    finalSourceRef = pattern.confidence_basis ? `source:${source}|reason:pattern|${pattern.confidence_basis}` : (sourceRef || '');
+
+    // Discard weak patterns
+    if (!pattern.generalized_pattern || pattern.generalized_pattern.length < 20) {
+      // Discard weak pattern, store original content
+      return writeMemory(source, category, content, meta);
+    }
+
+    const finalContent = patternToString(pattern);
+    const finalTags = pattern.generalized_pattern || (pattern.anti_patterns ? 'avoid:' + pattern.anti_patterns[0] : '');
+    const finalSourceRef = pattern.confidence_basis ? `source:${source}|reason:pattern|${pattern.confidence_basis}` : (sourceRef || '');
+
+    const database = getDb();
+    const result = database.prepare(`
+      INSERT INTO memory_entries
+        (source, category, content, task_id, agent, run_id, tags, confidence, source_ref, project, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())
+    `).run(source, category, finalContent, taskId, agent, runId, finalTags, confidence, finalSourceRef, project);
+
+    // Preserve raw content in meta for traceability
+    const { id } = result;
+    meta.raw_content = content;
+    meta.pattern = pattern;
+    meta.generated_id = id;
+
+    return { id };
   }
 
+  // No pattern generation - store content as-is
   const database = getDb();
   const result = database.prepare(`
     INSERT INTO memory_entries
       (source, category, content, task_id, agent, run_id, tags, confidence, source_ref, project, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())
-  `).run(source, category, finalContent, taskId, agent, runId, finalTags, confidence, finalSourceRef, project);
+  `).run(source, category, content, taskId, agent, runId, tags, confidence, sourceRef, project);
   return { id: result.lastInsertRowid };
 }
 
 function generateMemoryPattern(content) {
   const lower = (content || '').toLowerCase();
-  const outcome = /(?:outcome|result|status|conclusion|final|end)[\s:]+(?:success|failure|error|completed|done|aborted|failed|ok|succeeded)/.exec(lower);
-  const outcomeVal = outcome ? outcome[1].toLowerCase().replace(/,/g, '').trim() : 'unknown';
 
-  // Extract root cause: what went wrong or what was observed
+  // Improved outcome detection
+  const isFailure = /fail|error|exception|crash|timeout|invalid/i.test(lower);
+  const isSuccess = /pass|success|resolved|fixed|working/i.test(lower);
+
+  const outcomeVal = isFailure ? 'failure' : isSuccess ? 'success' : 'unknown';
+
+  // Extract root cause
   const rootCause = lower.match(/(?:root cause|issue|problem|bug|reason|because|due to|caused by|root cause of)[\s:]+([^\.]+)/i);
-  const rootCauseMatch = rootCause ? rootCause[1].trim() : lower.match(/(?:observed|noted|found|detected|identified)[\s:]+([^\.]+)/i);
-  const rootCauseText = rootCauseMatch ? rootCauseMatch[1].trim() : (lower.slice(0, 200).trim() || '');
+  const rootCauseText = rootCause ? rootCause[1].trim() : lower.slice(0, 200).trim() || 'observation';
 
-  // Extract trigger condition: when/what triggered the issue
+  // Extract trigger condition
   const triggerCondition = lower.match(/(?:trigger|triggered|when|after|on|during|preceded by|caused when)[\s:]+([^\.]+)/i);
   const triggerText = triggerCondition ? triggerCondition[1].trim() : lower.match(/(?:condition|scenario|situation|context|when|if)[\s:]+([^\.]+)/i);
   const triggerConditions = triggerText ? [triggerText.trim()] : [];
 
-  // Extract action taken: what was done to fix/prevent
-  const actionTaken = lower.match(/(?:action|fix|solution|resolution|remediation|what we did|we did|fixed|updated|reverted|removed|changed|modified|replaced)[\s:]+([^\.]+)/i);
-  const actionText = actionTaken ? actionTaken[1].trim() : lower.match(/(?:fixed|resolved|solved|handled|addressed|mitigated|remediated)[\s:]+([^\.]+)/i);
-  const recommendedAction = actionText ? actionText.trim() : 'monitor for recurrence';
+  // Extract action taken
+  const actionTaken = lower.match(/(?:fixed|resolved|solved|handled|addressed|mitigated|remediated|updated|reverted|removed|changed)[\s:]+([^\.]+)/i);
+  const recommendedAction = actionTaken ? actionTaken[1].trim() : 'monitor for recurrence';
 
-  // Extract outcome
+  // Extract confidence basis
   const confidenceBasis = lower.match(/(?:confidence|certainty|basis|warranted by)[\s:]+([^\.]+)/i);
-  const confidenceBasisText = confidenceBasis ? confidenceBasis[1].trim() : (outcome ? `${outcomeVal} outcome` : 'observed behavior');
+  const confidenceBasisText = confidenceBasis ? confidenceBasis[1].trim() : (outcomeVal ? `${outcomeVal} outcome` : 'observed behavior');
 
-  // Generate generalized pattern (reusable advice)
-  const generalizedPattern = lower.match(/(?:recommendation|lesson|lesson learned|best practice|guideline|do)[\s:]+([^\.]+)/i);
+  // Generate generalized pattern
+  const generalizedPattern = lower.match(/(?:recommendation|lesson|lesson learned|best practice|guideline)[\s:]+([^\.]+)/i);
   const generalizedPatternText = generalizedPattern ? generalizedPattern[1].trim() : recommendedAction;
 
-  // Generate anti-patterns (what NOT to do) for failures
+  // Force anti-pattern generation for failures
   const antiPatterns = [];
-  if (outcomeVal === 'failure' || outcomeVal === 'error') {
-    const anti = lower.match(/(?:avoid|don\'t|do not|never|do not|never)[\s:]+([^\.]+)/i);
-    if (anti) antiPatterns.push(`Avoid: ${anti[1].trim()}`);
+  if (outcomeVal === 'failure') {
+    const avoidMatch = lower.match(/(?:avoid|don\'t|do not|never)[\s:]+([^\.]+)/i);
+    if (avoidMatch) {
+      antiPatterns.push(`Avoid: ${avoidMatch[1].trim()}`);
+    } else if (rootCauseText) {
+      antiPatterns.push(`Do not repeat actions leading to: ${rootCauseText}`);
+    }
   }
 
   // Determine scope limits
@@ -87,12 +111,13 @@ function generateMemoryPattern(content) {
   const scopeText = scopeLimits ? scopeLimits[1].trim() : 'general';
 
   return {
-    generalized_pattern: generalizedPatternText || recommendedAction,
+    generalized_pattern: generalizedPatternText,
     trigger_conditions: triggerConditions,
     recommended_action: recommendedAction,
-    anti_patterns: antiPatterns.length > 0 ? antiPatterns : null,
+    anti_patterns: outcomeVal === 'failure' ? antiPatterns : null,
     confidence_basis: confidenceBasisText,
-    scope_limits: scopeText
+    scope_limits: scopeText,
+    outcome: outcomeVal
   };
 }
 
@@ -191,7 +216,15 @@ function scoreEntry(entry, prompt, taskId, now) {
   const score = contentMatch * 2 + recency + taskBoost + outcomeWeight + confidenceWeight + phraseMatch + (effectiveConfidenceScore * 0.3);
 
   const learningQualityBoost = getLearningQualityBoost(entry);
-  const finalScore = score + learningQualityBoost;
+
+  // Anti-pattern priority: failure patterns rank higher
+  const isFailureMemory = /anti:|avoid|do not|failure|error/i.test(entry.content);
+  const failureBoost = isFailureMemory ? 2.5 : 0;
+
+  // Success dampening for anti-pattern priority
+  const successDampening = !isFailureMemory && /success|fixed|resolved/i.test(entry.content) ? -0.5 : 0;
+
+  const finalScore = score + learningQualityBoost + failureBoost + successDampening;
 
   return {
     score: finalScore,
@@ -200,7 +233,10 @@ function scoreEntry(entry, prompt, taskId, now) {
     confidence_score: confidenceScore,
     effective_confidence_score: effectiveConfidenceScore,
     confidence_decay_factor: decayFactor,
-    learning_quality_boost: learningQualityBoost
+    learning_quality_boost: learningQualityBoost,
+    failure_boost: failureBoost,
+    success_dampening: successDampening,
+    is_failure_memory: isFailureMemory
   };
 }
 
