@@ -23,7 +23,7 @@ function getDb() {
 }
 
 function writeMemory(source, category, content, meta = {}) {
-  const { taskId = null, agent = null, runId = null, tags = null, confidence = null, sourceRef = null, project = null, rawExecutionLog = false } = meta;
+  const { taskId = null, agent = null, runId = null, tags = null, confidence = null, sourceRef = null, project = null, rawExecutionLog = false, usedPatterns = null } = meta;
 
   // Generate pattern only when explicitly requested (no heuristics)
   if (rawExecutionLog === true) {
@@ -344,11 +344,22 @@ function recallMemory(agent, taskId, prompt, limit = 3) {
   `).all(agent);
 
   const now = Math.floor(Date.now() / 1000);
-  return candidates
+  const scored = candidates
     .map(e => ({ ...e, ...scoreEntry(e, prompt, taskId, now, candidates) }))
     .filter(e => (e.contentMatch > 0 || e.phraseMatch > 0) && e.score > 1.5)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit);
+    .sort((a, b) => b.score - a.score);
+
+  // Mark top selected entries with used_for_decision flag for causality tracking
+  const selected = scored.slice(0, limit);
+  const usedPatterns = selected.map(e => e.id);
+
+  // Pass used patterns back through pipeline for writeMemory callback
+  selected.forEach((e, i) => {
+    e.used_for_decision = true;
+    e.use_order = i + 1;
+  });
+
+  return selected;
 }
 
 function markOutcome(id, outcome) {
@@ -371,8 +382,14 @@ function markOutcome(id, outcome) {
     const signal = outcome === 'success' ? 'pattern_success:+1' : 'pattern_failure:+1';
     updatedSourceRef = `${updatedSourceRef}|${signal}`;
 
-    // Track applied pattern signal for causality analysis
-    updatedSourceRef = `${updatedSourceRef}|applied_pattern:+1`;
+    // Track applied pattern signal ONLY if this pattern was actually used in decision
+    const isUsedPattern = usedPatterns ? usedPatterns.includes(id) : false;
+    if (isUsedPattern) {
+      // Check if applied_pattern signal already exists to avoid duplicates
+      if (!updatedSourceRef.includes('applied_pattern:')) {
+        updatedSourceRef = `${updatedSourceRef}|applied_pattern:+1`;
+      }
+    }
 
     // Confidence correction: compare suggested outcome with actual outcome
     const suggestedMatch = updatedSourceRef.match(/suggested:(\w+)/);
@@ -435,6 +452,7 @@ function getValidationScore(entry) {
 }
 
 // Causality Correlation: detect patterns that actually cause correct outcomes
+// Now measures: successCount / appliedCount where appliedCount is ONLY from actual usage
 function getCausalityScore(entry) {
   const sourceRef = entry.source_ref || '';
 
