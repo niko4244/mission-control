@@ -268,7 +268,15 @@ function scoreEntry(entry, prompt, taskId, now, allEntries = []) {
   const validationScore = getValidationScore(entry);
   const validationPenalty = validationScore < 0 ? validationScore * 2 : 0;
 
-  const finalScore = score + learningQualityBoost + failureBoost + successDampening + promotionBoost + demotionPenalty + clusterBoost + validationPenalty;
+  // Causality Correlation: distinguish patterns that cause correct outcomes
+  const causalityScore = getCausalityScore(entry);
+  const causalityBoost =
+    causalityScore > 0.7 ? 1.5 :
+    causalityScore > 0.5 ? 0.5 :
+    causalityScore < 0.3 ? -2 :
+    0;
+
+  const finalScore = score + learningQualityBoost + failureBoost + successDampening + promotionBoost + demotionPenalty + clusterBoost + validationPenalty + causalityBoost;
 
   // Block unsafe patterns: force demotion if validation score indicates unsafe content
   let forceDemote = false;
@@ -298,7 +306,9 @@ function scoreEntry(entry, prompt, taskId, now, allEntries = []) {
     cluster_failure_count: clusterFailureCount,
     similarity_matches: similarEntries.length,
     is_failure_memory: isFailureMemory,
-    force_demoted: forceDemote
+    force_demoted: forceDemote,
+    causality_score: causalityScore,
+    causality_boost: causalityBoost
   };
 }
 
@@ -357,9 +367,12 @@ function markOutcome(id, outcome) {
   // Track usage signals in source_ref (always accumulate)
   let updatedSourceRef = row.source_ref;
   if (updatedSourceRef) {
-    // Append pattern usage signal
+    // Append pattern usage signal - tracks pre/post state correlation
     const signal = outcome === 'success' ? 'pattern_success:+1' : 'pattern_failure:+1';
     updatedSourceRef = `${updatedSourceRef}|${signal}`;
+
+    // Track applied pattern signal for causality analysis
+    updatedSourceRef = `${updatedSourceRef}|applied_pattern:+1`;
 
     // Confidence correction: compare suggested outcome with actual outcome
     const suggestedMatch = updatedSourceRef.match(/suggested:(\w+)/);
@@ -419,6 +432,18 @@ function getValidationScore(entry) {
   if (/uncertain|guess|maybe|likely/i.test(content)) score -= 1;
 
   return score;
+}
+
+// Causality Correlation: detect patterns that actually cause correct outcomes
+function getCausalityScore(entry) {
+  const sourceRef = entry.source_ref || '';
+
+  const applied = (sourceRef.match(/applied_pattern:\+1/g) || []).length;
+  const success = (sourceRef.match(/pattern_success:\+1/g) || []).length;
+
+  if (applied === 0) return 0;
+
+  return success / applied;
 }
 
 // Pattern similarity clustering
