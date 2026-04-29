@@ -29,13 +29,19 @@ function writeMemory(source, category, content, meta = {}) {
   if (rawExecutionLog === true) {
     const pattern = generateMemoryPattern(content);
 
-    // Discard weak patterns
+    // Discard weak patterns - insert raw content with pattern traceability
     if (!pattern.generalized_pattern || pattern.generalized_pattern.length < 20) {
-      // Discard weak pattern, store original content
-      return writeMemory(source, category, content, meta);
+      const database = getDb();
+      const result = database.prepare(`
+        INSERT INTO memory_entries
+          (source, category, content, task_id, agent, run_id, tags, confidence, source_ref, project, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())
+      `).run(source, category, content, taskId, agent, runId, tags, confidence, sourceRef, project);
+      return { id: result.lastInsertRowid };
     }
 
-    const finalContent = patternToString(pattern);
+    // Persist both pattern and raw content for traceability
+    const finalContent = patternToString(pattern) + '\n\n--- RAW ---\n' + content;
     const finalTags = pattern.generalized_pattern || (pattern.anti_patterns ? 'avoid:' + pattern.anti_patterns[0] : '');
     const finalSourceRef = pattern.confidence_basis ? `source:${source}|reason:pattern|${pattern.confidence_basis}` : (sourceRef || '');
 
@@ -46,7 +52,6 @@ function writeMemory(source, category, content, meta = {}) {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())
     `).run(source, category, finalContent, taskId, agent, runId, finalTags, confidence, finalSourceRef, project);
 
-    // Preserve raw content in meta for traceability
     const { id } = result;
     meta.raw_content = content;
     meta.pattern = pattern;
@@ -69,7 +74,8 @@ function generateMemoryPattern(content) {
   const lower = (content || '').toLowerCase();
 
   // Improved outcome detection
-  const isFailure = /fail|error|exception|crash|timeout|invalid/i.test(lower);
+  const isFailure = /\b(failed|error|exception|crash|timeout)\b/i.test(lower)
+    && !/\b(no error|without error|handled error|resolved error)\b/i.test(lower);
   const isSuccess = /pass|success|resolved|fixed|working/i.test(lower);
 
   const outcomeVal = isFailure ? 'failure' : isSuccess ? 'success' : 'unknown';
@@ -219,12 +225,20 @@ function scoreEntry(entry, prompt, taskId, now) {
 
   // Anti-pattern priority: failure patterns rank higher
   const isFailureMemory = /anti:|avoid|do not|failure|error/i.test(entry.content);
-  const failureBoost = isFailureMemory ? 2.5 : 0;
+
+  // Confidence-aware failure boost
+  const failureBoost = isFailureMemory
+    ? 1 + Math.min(3, Math.abs(confidenceScore))
+    : 0;
 
   // Success dampening for anti-pattern priority
   const successDampening = !isFailureMemory && /success|fixed|resolved/i.test(entry.content) ? -0.5 : 0;
 
-  const finalScore = score + learningQualityBoost + failureBoost + successDampening;
+  // Promotion level system
+  const promotionLevel = getPromotionLevel(entry);
+  const promotionBoost = getPromotionBoost(promotionLevel);
+
+  const finalScore = score + learningQualityBoost + failureBoost + successDampening + promotionBoost;
 
   return {
     score: finalScore,
@@ -236,6 +250,8 @@ function scoreEntry(entry, prompt, taskId, now) {
     learning_quality_boost: learningQualityBoost,
     failure_boost: failureBoost,
     success_dampening: successDampening,
+    promotion_level: promotionLevel,
+    promotion_boost: promotionBoost,
     is_failure_memory: isFailureMemory
   };
 }
@@ -314,6 +330,27 @@ function getLearningQualityBoost(entry) {
   const riskPenalty = q.failureSafe ? 0 : 2;
 
   return boost - riskPenalty;
+}
+
+function getPromotionLevel(entry) {
+  const sourceRef = entry.source_ref || '';
+  const tags = entry.tags || '';
+
+  if (/promotion:core_rule/i.test(sourceRef) || /promotion:core_rule/i.test(tags)) return 'core_rule';
+  if (/promotion:validated_pattern/i.test(sourceRef) || /promotion:validated_pattern/i.test(tags)) return 'validated_pattern';
+  if (/promotion:candidate_pattern/i.test(sourceRef) || /promotion:candidate_pattern/i.test(tags)) return 'candidate_pattern';
+
+  return 'observation';
+}
+
+function getPromotionBoost(level) {
+  switch (level) {
+    case 'core_rule': return 3;
+    case 'validated_pattern': return 1.5;
+    case 'candidate_pattern': return 0.5;
+    case 'observation':
+    default: return 0;
+  }
 }
 
 function buildContext(recall) {
@@ -464,5 +501,7 @@ module.exports = {
   getLearningQuality,
   getLearningQualityBoost,
   generateMemoryPattern,
-  patternToString
+  patternToString,
+  getPromotionLevel,
+  getPromotionBoost
 };
