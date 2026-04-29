@@ -23,14 +23,100 @@ function getDb() {
 }
 
 function writeMemory(source, category, content, meta = {}) {
-  const { taskId = null, agent = null, runId = null, tags = null, confidence = null, sourceRef = null, project = null } = meta;
+  const { taskId = null, agent = null, runId = null, tags = null, confidence = null, sourceRef = null, project = null, rawExecutionLog = false } = meta;
+
+  // Generate pattern from raw execution log if requested
+  let finalContent = content;
+  let finalTags = tags;
+  let finalSourceRef = sourceRef;
+
+  if (rawExecutionLog || content.trim().startsWith('#') || content.trim().startsWith('*')) {
+    // Content appears to be a raw execution log - generate pattern
+    const pattern = generateMemoryPattern(content);
+    finalContent = patternToString(pattern);
+    finalTags = pattern.generalized_pattern || (pattern.anti_patterns ? 'avoid:' + pattern.anti_patterns[0] : '');
+    finalSourceRef = pattern.confidence_basis ? `source:${source}|reason:pattern|${pattern.confidence_basis}` : (sourceRef || '');
+  }
+
   const database = getDb();
   const result = database.prepare(`
     INSERT INTO memory_entries
       (source, category, content, task_id, agent, run_id, tags, confidence, source_ref, project, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())
-  `).run(source, category, content, taskId, agent, runId, tags, confidence, sourceRef, project);
+  `).run(source, category, finalContent, taskId, agent, runId, finalTags, confidence, finalSourceRef, project);
   return { id: result.lastInsertRowid };
+}
+
+function generateMemoryPattern(content) {
+  const lower = (content || '').toLowerCase();
+  const outcome = /(?:outcome|result|status|conclusion|final|end)[\s:]+(?:success|failure|error|completed|done|aborted|failed|ok|succeeded)/.exec(lower);
+  const outcomeVal = outcome ? outcome[1].toLowerCase().replace(/,/g, '').trim() : 'unknown';
+
+  // Extract root cause: what went wrong or what was observed
+  const rootCause = lower.match(/(?:root cause|issue|problem|bug|reason|because|due to|caused by|root cause of)[\s:]+([^\.]+)/i);
+  const rootCauseMatch = rootCause ? rootCause[1].trim() : lower.match(/(?:observed|noted|found|detected|identified)[\s:]+([^\.]+)/i);
+  const rootCauseText = rootCauseMatch ? rootCauseMatch[1].trim() : (lower.slice(0, 200).trim() || '');
+
+  // Extract trigger condition: when/what triggered the issue
+  const triggerCondition = lower.match(/(?:trigger|triggered|when|after|on|during|preceded by|caused when)[\s:]+([^\.]+)/i);
+  const triggerText = triggerCondition ? triggerCondition[1].trim() : lower.match(/(?:condition|scenario|situation|context|when|if)[\s:]+([^\.]+)/i);
+  const triggerConditions = triggerText ? [triggerText.trim()] : [];
+
+  // Extract action taken: what was done to fix/prevent
+  const actionTaken = lower.match(/(?:action|fix|solution|resolution|remediation|what we did|we did|fixed|updated|reverted|removed|changed|modified|replaced)[\s:]+([^\.]+)/i);
+  const actionText = actionTaken ? actionTaken[1].trim() : lower.match(/(?:fixed|resolved|solved|handled|addressed|mitigated|remediated)[\s:]+([^\.]+)/i);
+  const recommendedAction = actionText ? actionText.trim() : 'monitor for recurrence';
+
+  // Extract outcome
+  const confidenceBasis = lower.match(/(?:confidence|certainty|basis|warranted by)[\s:]+([^\.]+)/i);
+  const confidenceBasisText = confidenceBasis ? confidenceBasis[1].trim() : (outcome ? `${outcomeVal} outcome` : 'observed behavior');
+
+  // Generate generalized pattern (reusable advice)
+  const generalizedPattern = lower.match(/(?:recommendation|lesson|lesson learned|best practice|guideline|do)[\s:]+([^\.]+)/i);
+  const generalizedPatternText = generalizedPattern ? generalizedPattern[1].trim() : recommendedAction;
+
+  // Generate anti-patterns (what NOT to do) for failures
+  const antiPatterns = [];
+  if (outcomeVal === 'failure' || outcomeVal === 'error') {
+    const anti = lower.match(/(?:avoid|don\'t|do not|never|do not|never)[\s:]+([^\.]+)/i);
+    if (anti) antiPatterns.push(`Avoid: ${anti[1].trim()}`);
+  }
+
+  // Determine scope limits
+  const scopeLimits = lower.match(/(?:scope|limit|bound|applicable to|only for|exclude|unless)[\s:]+([^\.]+)/i);
+  const scopeText = scopeLimits ? scopeLimits[1].trim() : 'general';
+
+  return {
+    generalized_pattern: generalizedPatternText || recommendedAction,
+    trigger_conditions: triggerConditions,
+    recommended_action: recommendedAction,
+    anti_patterns: antiPatterns.length > 0 ? antiPatterns : null,
+    confidence_basis: confidenceBasisText,
+    scope_limits: scopeText
+  };
+}
+
+function patternToString(pattern) {
+  if (!pattern) return '';
+  const lines = [pattern.generalized_pattern];
+  if (pattern.trigger_conditions && pattern.trigger_conditions.length > 0) {
+    lines.push(`Triggers: ${pattern.trigger_conditions.join(', ')}`);
+  }
+  if (pattern.recommended_action !== pattern.generalized_pattern) {
+    lines.push(`Action: ${pattern.recommended_action}`);
+  }
+  if (pattern.confidence_basis) {
+    lines.push(`Confidence: ${pattern.confidence_basis}`);
+  }
+  if (pattern.scope_limits && pattern.scope_limits !== 'general') {
+    lines.push(`Scope: ${pattern.scope_limits}`);
+  }
+  if (pattern.anti_patterns) {
+    for (const anti of pattern.anti_patterns) {
+      lines.push(`Anti: ${anti}`);
+    }
+  }
+  return lines.join('\n');
 }
 
 function queryMemory(searchTerm, filters = {}) {
@@ -340,5 +426,7 @@ module.exports = {
   getOutcomeSuggestion,
   approveOutcomes,
   getLearningQuality,
-  getLearningQualityBoost
+  getLearningQualityBoost,
+  generateMemoryPattern,
+  patternToString
 };
