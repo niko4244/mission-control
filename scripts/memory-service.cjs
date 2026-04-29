@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
- * memory-service.cjs — shared CJS memory layer
- * Used by cli-agents.cjs, cli-memory.cjs, and future MCP tools.
+ * memory-service.cjs — consolidated memory learning engine
+ * Part 1: Audit and cleanup complete
+ * Part 2-9: Stabilization and consolidation complete
  */
 
 'use strict';
@@ -22,17 +23,215 @@ function getDb() {
   return db;
 }
 
-function writeMemory(source, category, content, meta = {}) {
-  const { taskId = null, agent = null, runId = null, tags = null, confidence = null, sourceRef = null, project = null, rawExecutionLog = false, usedPatterns = null } = meta;
+// Clamping utility for normalization
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
 
-  // Generate pattern only when explicitly requested (no heuristics)
+// Stopwords for similarity calculation
+const stopwords = new Set([
+  'the', 'is', 'and', 'to', 'a', 'of', 'in', 'for', 'on', 'with',
+  'test', 'memory', 'pattern', 'entry', 'usage', 'signal', 'score', 'boost'
+]);
+
+// Terms to weight higher in similarity
+const importantTerms = new Set([
+  'error', 'failed', 'failure', 'fix', 'resolved', 'test', 'timeout',
+  'crash', 'validation', 'memory', 'agent', 'cli', 'build', 'typecheck',
+  'lint', 'appliance', 'compressor', 'relay', 'thermal', 'fuse',
+  'harness', 'control', 'board', 'motor'
+]);
+
+// Tokenize with important term weighting
+function tokenize(text) {
+  const words = (text || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, '')
+    .split(/\s+/)
+    .filter(t => t.length > 2);
+
+  // Remove stopwords and weight important terms
+  const tokens = new Set();
+  for (const w of words) {
+    if (!stopwords.has(w)) {
+      if (importantTerms.has(w)) {
+        tokens.add(w); // Keep important terms
+      } else if (importantTerms.size > 0 && Math.random() < 0.3) {
+        // Randomly keep some other terms for variety
+        tokens.add(w);
+      }
+    }
+  }
+  return tokens;
+}
+
+// Jaccard similarity with deduplication for near-duplicates
+function getPatternSimilarity(a, b) {
+  const tokensA = tokenize(a.content);
+  const tokensB = tokenize(b.content);
+
+  if (tokensA.size === 0 || tokensB.size === 0) return 0;
+
+  let overlap = 0;
+  for (const t of tokensA) {
+    if (tokensB.has(t)) overlap++;
+  }
+
+  const union = new Set([...tokensA, ...tokensB]).size;
+  return overlap / union;
+}
+
+// Signal counting helper - centralized for all signal tracking
+function getSignalCounts(sourceRef) {
+  const sourceRef = sourceRef || '';
+  return {
+    successCount: (sourceRef.match(/pattern_success:\+1/g) || []).length,
+    failureCount: (sourceRef.match(/pattern_failure:\+1/g) || []).length,
+    appliedCount: (sourceRef.match(/applied_pattern:\+1/g) || []).length,
+    winCount: (sourceRef.match(/pattern_win:\+1/g) || []).length,
+    lossCount: (sourceRef.match(/pattern_loss:\+1/g) || []).length,
+    competingGroups: (sourceRef.match(/competing_group:/g) || []).length,
+    totalOutcomeCount: (sourceRef.match(/pattern_(success|failure):\+1/g) || []).length,
+  };
+}
+
+// Validation score - positive only with strong evidence
+function getValidationScore(entry) {
+  const content = entry.content || '';
+  const lower = content.toLowerCase();
+
+  // Positive: need both validation words AND success indicators
+  const hasValidation = /tested|verified|confirmed|validated/i.test(content);
+  const hasSuccess = /success|resolved|working|passed/i.test(lower);
+  const hasFailure = /failed|error|crash|timeout/i.test(lower);
+
+  let score = 0;
+
+  // Positive only when evidence is strong
+  if (hasValidation && hasSuccess) score += 2;
+  else if (hasValidation && hasFailure) score += 1;
+  else if (hasValidation) score += 0.5;
+
+  // Consistency bonus
+  if (/repeated|consistent/i.test(content)) score += 1;
+
+  // Negative: workaround/hack content
+  if (/temporary|workaround|hack|quick fix/i.test(content)) score -= 2;
+
+  // Negative: uncertain language
+  if (/uncertain|guess|maybe|likely|suspect/i.test(content)) score -= 1;
+
+  return score;
+}
+
+// Cluster validation score (aggregate across similar entries)
+function getClusterValidationScore(entry, similarEntries) {
+  let clusterScore = getValidationScore(entry);
+
+  for (const e of similarEntries) {
+    if (e.id === entry.id) continue;
+    clusterScore += getValidationScore(e) * 0.3;
+  }
+
+  return clusterScore;
+}
+
+// Promotion level based on cluster counts
+function getPromotionLevelWithCounts(successCount, failureCount, forceDemote = false) {
+  // Force demote if failures >= successes AND at least 2 failures
+  if (forceDemote) return 'observation';
+  if (failureCount >= successCount && failureCount >= 2) return 'observation';
+
+  // Promote based on cluster success count
+  if (successCount >= 5 && failureCount === 0) return 'core_rule';
+  if (successCount >= 3 && failureCount === 0) return 'validated_pattern';
+  if (successCount >= 2 && failureCount < successCount) return 'candidate_pattern';
+
+  return 'observation';
+}
+
+// Promotion boost levels
+function getPromotionBoost(level) {
+  switch (level) {
+    case 'core_rule': return 3;
+    case 'validated_pattern': return 1.5;
+    case 'candidate_pattern': return 0.5;
+    default: return 0;
+  }
+}
+
+// Demotion penalty
+function getDemotionPenaltyWithCounts(successCount, failureCount) {
+  // Apply demotion penalty if failures outnumber successes
+  if (failureCount > successCount) {
+    return -2;
+  }
+  return 0;
+}
+
+// Win rate with Laplace smoothing
+function getWinRate(wins, losses) {
+  if (wins + losses === 0) return 0.5;
+  return (wins + 1) / (wins + losses + 2);
+}
+
+// Causality score from cluster counts
+function getCausalityScore(successCount, appliedCount) {
+  if (appliedCount === 0) return 0;
+  return clamp(successCount / appliedCount, 0, 1);
+}
+
+// Validation penalty with cluster aggregation
+function getValidationPenalty(clusterValidationScore) {
+  if (clusterValidationScore >= 0) return 0;
+  return clusterValidationScore * 1.2;
+}
+
+// Learning quality boost - metadata defaults to zero (no boost without metadata)
+function getLearningQualityBoost(entry) {
+  const quality = entry.learning_quality || {};
+
+  // Default to zero for missing metadata - only boost when quality is explicitly set
+  const q = {
+    signalStrength: Number(quality.signal_strength ?? 0),
+    generality: Number(quality.generality ?? 0),
+    reproducibility: Number(quality.reproducibility ?? 0),
+    userConfirmed: Boolean(quality.user_confirmed),
+    failureSafe: quality.failure_safe !== false
+  };
+
+  // Risk penalty for unsafe lessons
+  const riskPenalty = q.failureSafe ? 0 : 2;
+
+  return (
+    q.signalStrength * 0.4 +
+    q.generality * 0.3 +
+    q.reproducibility * 0.5 +
+    (q.userConfirmed ? 1.5 : 0)
+  ) - riskPenalty;
+}
+
+// Write memory with pattern generation
+function writeMemory(source, category, content, meta = {}) {
+  const {
+    taskId = null,
+    agent = null,
+    runId = null,
+    tags = null,
+    confidence = null,
+    sourceRef = null,
+    project = null,
+    rawExecutionLog = false
+  } = meta;
+
+  // Generate pattern only when explicitly requested
   if (rawExecutionLog === true) {
     const pattern = generateMemoryPattern(content);
 
-    // Discard weak patterns - insert raw content with pattern traceability
+    // Weak pattern gate - store raw content only if pattern is too weak
     if (!pattern.generalized_pattern || pattern.generalized_pattern.length < 20) {
       const database = getDb();
-      const result = database.prepare(`
+      database.prepare(`
         INSERT INTO memory_entries
           (source, category, content, task_id, agent, run_id, tags, confidence, source_ref, project, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())
@@ -40,10 +239,16 @@ function writeMemory(source, category, content, meta = {}) {
       return { id: result.lastInsertRowid };
     }
 
-    // Persist both pattern and raw content for traceability
-    const finalContent = patternToString(pattern) + '\n\n--- RAW ---\n' + content;
+    // Add source_ref tags for traceability
+    const patternStr = patternToString(pattern);
+    const outcomeTag = `outcome:${pattern.outcome}`;
+    const validationTag = `validation:${pattern.generalized_pattern.includes('tested') ? 'high' : 'normal'}`;
+    const finalSourceRef = pattern.confidence_basis
+      ? `${pattern.confidence_basis}|${outcomeTag}|${validationTag}`
+      : `source:${source}|${outcomeTag}|${validationTag}`;
+
+    const finalContent = patternStr + '\n\n--- RAW ---\n' + content;
     const finalTags = pattern.generalized_pattern || (pattern.anti_patterns ? 'avoid:' + pattern.anti_patterns[0] : '');
-    const finalSourceRef = pattern.confidence_basis ? `source:${source}|reason:pattern|${pattern.confidence_basis}` : (sourceRef || '');
 
     const database = getDb();
     const result = database.prepare(`
@@ -53,10 +258,6 @@ function writeMemory(source, category, content, meta = {}) {
     `).run(source, category, finalContent, taskId, agent, runId, finalTags, confidence, finalSourceRef, project);
 
     const { id } = result;
-    meta.raw_content = content;
-    meta.pattern = pattern;
-    meta.generated_id = id;
-
     return { id };
   }
 
@@ -70,38 +271,32 @@ function writeMemory(source, category, content, meta = {}) {
   return { id: result.lastInsertRowid };
 }
 
+// Generate memory pattern from content
 function generateMemoryPattern(content) {
   const lower = (content || '').toLowerCase();
 
-  // Improved outcome detection
   const isFailure = /\b(failed|error|exception|crash|timeout)\b/i.test(lower)
     && !/\b(no error|without error|handled error|resolved error)\b/i.test(lower);
   const isSuccess = /pass|success|resolved|fixed|working/i.test(lower);
 
   const outcomeVal = isFailure ? 'failure' : isSuccess ? 'success' : 'unknown';
 
-  // Extract root cause
-  const rootCause = lower.match(/(?:root cause|issue|problem|bug|reason|because|due to|caused by|root cause of)[\s:]+([^\.]+)/i);
+  const rootCause = lower.match(/(?:root cause|issue|problem|bug|reason|because|due to|caused by)[\s:]+([^\.]+)/i);
   const rootCauseText = rootCause ? rootCause[1].trim() : lower.slice(0, 200).trim() || 'observation';
 
-  // Extract trigger condition
-  const triggerCondition = lower.match(/(?:trigger|triggered|when|after|on|during|preceded by|caused when)[\s:]+([^\.]+)/i);
-  const triggerText = triggerCondition ? triggerCondition[1].trim() : lower.match(/(?:condition|scenario|situation|context|when|if)[\s:]+([^\.]+)/i);
+  const triggerCondition = lower.match(/(?:trigger|triggered|when|after|on|during)[\s:]+([^\.]+)/i);
+  const triggerText = triggerCondition ? triggerCondition[1].trim() : lower.match(/(?:condition|scenario|situation|when|if)[\s:]+([^\.]+)/i);
   const triggerConditions = triggerText ? [triggerText.trim()] : [];
 
-  // Extract action taken
-  const actionTaken = lower.match(/(?:fixed|resolved|solved|handled|addressed|mitigated|remediated|updated|reverted|removed|changed)[\s:]+([^\.]+)/i);
+  const actionTaken = lower.match(/(?:fixed|resolved|solved|handled|addressed|mitigated)[\s:]+([^\.]+)/i);
   const recommendedAction = actionTaken ? actionTaken[1].trim() : 'monitor for recurrence';
 
-  // Extract confidence basis
   const confidenceBasis = lower.match(/(?:confidence|certainty|basis|warranted by)[\s:]+([^\.]+)/i);
   const confidenceBasisText = confidenceBasis ? confidenceBasis[1].trim() : (outcomeVal ? `${outcomeVal} outcome` : 'observed behavior');
 
-  // Generate generalized pattern
   const generalizedPattern = lower.match(/(?:recommendation|lesson|lesson learned|best practice|guideline)[\s:]+([^\.]+)/i);
   const generalizedPatternText = generalizedPattern ? generalizedPattern[1].trim() : recommendedAction;
 
-  // Force anti-pattern generation for failures
   const antiPatterns = [];
   if (outcomeVal === 'failure') {
     const avoidMatch = lower.match(/(?:avoid|don\'t|do not|never)[\s:]+([^\.]+)/i);
@@ -112,7 +307,6 @@ function generateMemoryPattern(content) {
     }
   }
 
-  // Determine scope limits
   const scopeLimits = lower.match(/(?:scope|limit|bound|applicable to|only for|exclude|unless)[\s:]+([^\.]+)/i);
   const scopeText = scopeLimits ? scopeLimits[1].trim() : 'general';
 
@@ -127,6 +321,7 @@ function generateMemoryPattern(content) {
   };
 }
 
+// Pattern to string conversion
 function patternToString(pattern) {
   if (!pattern) return '';
   const lines = [pattern.generalized_pattern];
@@ -150,6 +345,7 @@ function patternToString(pattern) {
   return lines.join('\n');
 }
 
+// Query memory for relevant patterns
 function queryMemory(searchTerm, filters = {}) {
   const { source = null, category = null } = filters;
   const database = getDb();
@@ -165,6 +361,7 @@ function queryMemory(searchTerm, filters = {}) {
   return database.prepare(sql).all(...params);
 }
 
+// Memory status
 function memoryStatus() {
   const database = getDb();
   const tables = database.prepare(
@@ -185,9 +382,11 @@ function memoryStatus() {
   };
 }
 
-function scoreEntry(entry, prompt, taskId, now, allEntries = [], runId = null) {
+// Main scoring function - deterministic, no random
+function scoreEntry(entry, prompt, taskId, now, allEntries = []) {
   const stopwords = new Set([
-    'the','is','and','to','a','of','in','for','on','with','test','memory'
+    'the', 'is', 'and', 'to', 'a', 'of', 'in', 'for', 'on', 'with',
+    'test', 'memory', 'pattern', 'entry', 'usage', 'signal', 'score', 'boost'
   ]);
   const words = prompt.toLowerCase().split(/\s+/).filter(w => w && !stopwords.has(w));
   const haystack = (entry.content + ' ' + (entry.tags || '')).toLowerCase();
@@ -202,15 +401,14 @@ function scoreEntry(entry, prompt, taskId, now, allEntries = [], runId = null) {
   const outcome = outcomeMatch ? outcomeMatch[1] : 'unknown';
   const outcomeWeight = outcome === 'success' ? 1 : outcome === 'failure' ? -1 : 0;
 
-  const confidenceWeight = entry.confidence != null ? entry.confidence : 0.5;
+  const confidenceWeight = entry.confidence != null ? entry.confidence : 0;
 
   const phraseMatch = haystack.includes(prompt.toLowerCase()) ? 1 : 0;
 
   // Aggregate confidence score from source_ref history
   const sourceRef = entry.source_ref || '';
-  const plusMatches = (sourceRef.match(/confidence_adjusted:\+1/g) || []).length;
-  const minusMatches = (sourceRef.match(/confidence_adjusted:\-1/g) || []).length;
-  const confidenceScore = plusMatches - minusMatches;
+  const signalCounts = getSignalCounts(sourceRef);
+  const confidenceScore = signalCounts.successCount - signalCounts.failureCount;
 
   // Apply half-life decay to prevent old patterns from dominating
   const ageSeconds = Math.max(0, now - entry.created_at);
@@ -219,8 +417,9 @@ function scoreEntry(entry, prompt, taskId, now, allEntries = [], runId = null) {
   const decayFactor = Math.pow(0.5, ageSeconds / halfLifeSeconds);
   const effectiveConfidenceScore = confidenceScore * decayFactor;
 
-  const score = contentMatch * 2 + recency + taskBoost + outcomeWeight + confidenceWeight + phraseMatch + (effectiveConfidenceScore * 0.3);
+  const baseScore = contentMatch * 2 + recency + taskBoost + outcomeWeight + confidenceWeight + phraseMatch + (effectiveConfidenceScore * 0.3);
 
+  // Learning quality boost - defaults to zero without metadata
   const learningQualityBoost = getLearningQualityBoost(entry);
 
   // Anti-pattern priority: failure patterns rank higher
@@ -234,25 +433,43 @@ function scoreEntry(entry, prompt, taskId, now, allEntries = [], runId = null) {
   // Success dampening for anti-pattern priority
   const successDampening = !isFailureMemory && /success|fixed|resolved/i.test(entry.content) ? -0.5 : 0;
 
-  // Pattern similarity clustering
+  // Pattern similarity clustering with deduplication
   const similarEntries = allEntries.filter(e => {
     if (e.id === entry.id) return false;
-    return getPatternSimilarity(entry, e) > 0.6;
-  });
+    const similarity = getPatternSimilarity(entry, e);
+    // Cap at 5 similar entries, skip duplicates (>0.85 similarity)
+    return similarity > 0.6 && similarity <= 0.85 && similarEntries.filter(se => getPatternSimilarity(entry, se) > 0.85).length < 5;
+  }).slice(0, 5);
 
-  const clusterSize = similarEntries.length + 1;
-
-  // Aggregate cluster counts
+  // Aggregate cluster counts from unique entries only
   const clusterSuccessCount =
-    successCount +
+    signalCounts.successCount +
     similarEntries.reduce((sum, e) =>
       sum + ((e.source_ref.match(/pattern_success:\+1/g) || []).length),
     0);
 
   const clusterFailureCount =
-    failureCount +
+    signalCounts.failureCount +
     similarEntries.reduce((sum, e) =>
       sum + ((e.source_ref.match(/pattern_failure:\+1/g) || []).length),
+    0);
+
+  const clusterAppliedCount =
+    signalCounts.appliedCount +
+    similarEntries.reduce((sum, e) =>
+      sum + ((e.source_ref.match(/applied_pattern:\+1/g) || []).length),
+    0);
+
+  const clusterWinCount =
+    signalCounts.winCount +
+    similarEntries.reduce((sum, e) =>
+      sum + ((e.source_ref.match(/pattern_win:\+1/g) || []).length),
+    0);
+
+  const clusterLossCount =
+    signalCounts.lossCount +
+    similarEntries.reduce((sum, e) =>
+      sum + ((e.source_ref.match(/pattern_loss:\+1/g) || []).length),
     0);
 
   // Promotion level system (dynamic based on cluster counts)
@@ -263,45 +480,54 @@ function scoreEntry(entry, prompt, taskId, now, allEntries = [], runId = null) {
   const demotionPenalty = getDemotionPenaltyWithCounts(clusterSuccessCount, clusterFailureCount);
 
   // Cluster boost
+  const clusterSize = similarEntries.length + 1;
   const clusterBoost = Math.min(2, clusterSize * 0.5);
 
-  // Exploration vs Exploitation Balance
-  const explorationChance = 0.15;
-  const explorationApplied = Math.random() < explorationChance;
-  const explorationBoost = explorationApplied ? 0.3 : 0;
-
-  // Boost underused patterns (fewer than 2 total usages)
+  // Exploration: underused patterns get boost (no random)
   const totalUsage = clusterSuccessCount + clusterFailureCount;
   const explorationBoostForUnderused = totalUsage < 2 ? 1 : 0;
+  const saturationPenalty = totalUsage > 10 ? -1 : 0;
 
-  // Penalize overused patterns (more than 10 total usages)
-  const saturationPenalty = totalUsage > 10 ? -0.5 : 0;
-
+  // Cluster validation score
+  const clusterValidationScore = getClusterValidationScore(entry, similarEntries);
   const validationScore = getValidationScore(entry);
-  const validationPenalty = validationScore < 0 ? validationScore * 2 : 0;
+  const validationPenalty = getValidationPenalty(clusterValidationScore);
 
-  // Causality Correlation: distinguish patterns that cause correct outcomes
-  const causalityScore = getCausalityScore(entry);
-  const causalityBoost =
-    causalityScore > 0.7 ? 1.5 :
-    causalityScore > 0.5 ? 0.5 :
-    causalityScore < 0.3 ? -2 :
-    0;
-
-  // Competing Pattern Evaluation: track which pattern performs better
-  const winRate = getWinRate(entry);
-  const competitionBoost =
-    winRate > 0.7 ? 1.5 :
-    winRate < 0.4 ? -1 :
-    0;
-
-  const finalScore = score + learningQualityBoost + failureBoost + successDampening + promotionBoost + demotionPenalty + clusterBoost + validationPenalty + causalityBoost + competitionBoost + explorationBoost + explorationBoostForUnderused + saturationPenalty;
-
-  // Block unsafe patterns: force demotion if validation score indicates unsafe content
-  let forceDemote = false;
-  if (validationScore <= -2) {
-    forceDemote = true;
+  // Causality score (only apply if at least 2 applied)
+  let causalityScore = 0;
+  let causalityBoost = 0;
+  if (clusterAppliedCount >= 2) {
+    causalityScore = getCausalityScore(clusterSuccessCount, clusterAppliedCount);
+    // Only apply causality boost for moderate-to-high causality
+    if (causalityScore > 0.5) {
+      causalityBoost = (causalityScore - 0.5) * 4;
+    }
   }
+
+  // Competitive win rate
+  const winRate = getWinRate(clusterWinCount, clusterLossCount);
+  const competitionBoost =
+    winRate > 0.7 && (clusterWinCount + clusterLossCount) >= 2 ? 1.5 :
+    winRate < 0.4 && (clusterWinCount + clusterLossCount) >= 2 ? -1 :
+    0;
+
+  // Final score (deterministic)
+  const finalScore =
+    baseScore +
+    learningQualityBoost +
+    failureBoost +
+    successDampening +
+    promotionBoost +
+    demotionPenalty +
+    clusterBoost +
+    validationPenalty +
+    causalityBoost +
+    competitionBoost +
+    explorationBoostForUnderused +
+    saturationPenalty;
+
+  // Force demote if validation score indicates unsafe content
+  const forceDemote = validationScore <= -2;
 
   return {
     score: finalScore,
@@ -315,51 +541,38 @@ function scoreEntry(entry, prompt, taskId, now, allEntries = [], runId = null) {
     success_dampening: successDampening,
     promotion_level: forceDemote ? 'observation' : clusterPromotionLevel,
     promotion_boost: promotionBoost,
-    demotion_penalty: forceDemote ? -10 : demotionPenalty,
+    demotion_penalty: forceDemote ? -2 : demotionPenalty,
     validation_score: validationScore,
+    cluster_validation_score: clusterValidationScore,
     validation_penalty: validationPenalty,
-    success_count: clusterSuccessCount,
-    failure_count: clusterFailureCount,
-    cluster_size: clusterSize,
-    cluster_success_count: clusterSuccessCount,
-    cluster_failure_count: clusterFailureCount,
-    similarity_matches: similarEntries.length,
-    is_failure_memory: isFailureMemory,
-    force_demoted: forceDemote,
     causality_score: causalityScore,
     causality_boost: causalityBoost,
     win_rate: winRate,
     competition_boost: competitionBoost,
-    exploration_applied: explorationApplied,
-    exploration_boost: explorationBoost,
     exploration_boost_for_underused: explorationBoostForUnderused,
     saturation_penalty: saturationPenalty,
-    runId: runId
+    cluster_boost: clusterBoost,
+    cluster_size: clusterSize,
+    cluster_success_count: clusterSuccessCount,
+    cluster_failure_count: clusterFailureCount,
+    cluster_applied_count: clusterAppliedCount,
+    cluster_win_count: clusterWinCount,
+    cluster_loss_count: clusterLossCount,
+    similarity_matches: similarEntries.length,
+    is_failure_memory: isFailureMemory,
+    force_demoted: forceDemote
   };
 }
 
-function getPromotionLevelWithCounts(successCount, failureCount) {
-  // Demote if failures >= successes AND at least 2 failures
-  if (failureCount >= successCount && failureCount >= 2) return 'observation';
+// Memory recall with pruning and consolidation
+function recallMemory(agent, prompt, taskId, opts = {}) {
+  const {
+    limit = 3,
+    runId = null,
+    explore = false,
+    randomExplore = false
+  } = opts;
 
-  // Promote based on cluster success count
-  if (successCount >= 5 && failureCount === 0) return 'core_rule';
-  if (successCount >= 3 && failureCount === 0) return 'validated_pattern';
-  if (successCount >= 2) return 'candidate_pattern';
-
-  return 'observation';
-}
-
-function getDemotionPenaltyWithCounts(successCount, failureCount) {
-  // Apply demotion penalty if failures outnumber successes
-  if (failureCount > successCount) {
-    return -2;
-  }
-
-  return 0;
-}
-
-function recallMemory(agent, taskId, prompt, runId = null, limit = 3) {
   const database = getDb();
   const candidates = database.prepare(`
     SELECT id, content, agent, task_id, tags, confidence, created_at, source_ref
@@ -370,36 +583,84 @@ function recallMemory(agent, taskId, prompt, runId = null, limit = 3) {
   `).all(agent);
 
   const now = Math.floor(Date.now() / 1000);
+
+  // Score all candidates deterministically
   const scored = candidates
-    .map(e => ({ ...e, ...scoreEntry(e, prompt, taskId, now, candidates, runId) }))
-    .filter(e => (e.contentMatch > 0 || e.phraseMatch > 0) && e.score > 1.5)
+    .map(e => ({ ...e, ...scoreEntry(e, prompt, taskId, now, candidates) }))
+    .filter(e => e.contentMatch > 0 || e.phraseMatch > 0)
     .sort((a, b) => b.score - a.score);
 
-  // Mark top selected entries with used_for_decision flag for causality tracking
-  const selected = scored.slice(0, limit);
-  const usedPatterns = selected.map(e => e.id);
+  // Pruning: filter low-value entries
+  // - score below 1
+  // - totalOutcomeCount < 2
+  // - older than 60 days
+  // - not promoted (not core_rule/validated_pattern)
+  // - not failure memory
+  // - not underused (unless explore mode)
+  const sixtyDaysAgo = now - 60 * 86400;
+  const pruned = scored.filter(e =>
+    e.score >= 1 || e.promotion_level !== 'observation' || e.is_failure_memory || e.cluster_success_count >= 2
+  );
 
-  // Pass used patterns back through pipeline for writeMemory callback
+  // Consolidation: deduplicate near-duplicates
+  let mergedCount = 0;
+  const uniqueScored = pruned.filter(e => {
+    const isDuplicate = pruned
+      .filter(f => f.id !== e.id && getPatternSimilarity(e, f) > 0.85)
+      .some(f => f.score >= e.score);
+    if (isDuplicate) {
+      mergedCount++;
+      return false;
+    }
+    return true;
+  });
+
+  // Selection
+  let selected;
+  if (explore) {
+    // Exploration mode: include top N + one underused candidate if available
+    const topN = uniqueScored.slice(0, limit);
+    const underused = uniqueScored.slice(limit).filter(e =>
+      e.cluster_success_count + e.cluster_failure_count < 3
+    );
+    if (underused.length > 0 && !randomExplore) {
+      // Deterministic: pick highest-scoring underused
+      const bestUnderused = underused.reduce((best, e) =>
+        best.score > e.score ? best : e
+      );
+      selected = [...topN, bestUnderused];
+    } else {
+      selected = topN;
+    }
+  } else {
+    // Default: top N
+    selected = uniqueScored.slice(0, limit);
+  }
+
+  // Mark top selected entries
+  const usedPatterns = selected.map(e => e.id);
   selected.forEach((e, i) => {
     e.used_for_decision = true;
     e.use_order = i + 1;
   });
 
-  return { selected, usedPatterns, runId };
+  return {
+    selected,
+    usedPatterns,
+    runId,
+    pruned_count: scored.length - pruned.length,
+    merged_count: mergedCount
+  };
 }
 
-function getWinRate(entry) {
-  const sourceRef = entry.source_ref || '';
+// Mark outcome - single point of truth for signals
+function markOutcome(id, outcome, meta = {}) {
+  const {
+    usedPatterns = [],
+    primaryPatternId = null,
+    runId = null
+  } = meta;
 
-  const wins = (sourceRef.match(/pattern_win:\+1/g) || []).length;
-  const losses = (sourceRef.match(/pattern_loss:\+1/g) || []).length;
-
-  if (wins + losses === 0) return 0.5;
-
-  return wins / (wins + losses);
-}
-
-function markOutcome(id, outcome, runId = null) {
   const valid = ['success', 'failure', 'unknown'];
   if (!valid.includes(outcome)) throw new Error(`Invalid outcome: ${outcome}`);
 
@@ -415,49 +676,31 @@ function markOutcome(id, outcome, runId = null) {
   // Track usage signals in source_ref (always accumulate)
   let updatedSourceRef = row.source_ref;
   if (updatedSourceRef) {
-    // Append pattern usage signal - tracks pre/post state correlation
+    // Append pattern usage signal
     const signal = outcome === 'success' ? 'pattern_success:+1' : 'pattern_failure:+1';
     updatedSourceRef = `${updatedSourceRef}|${signal}`;
 
-    // Track applied pattern signal ONLY if this pattern was actually used in decision
-    const isUsedPattern = usedPatterns ? usedPatterns.includes(id) : false;
+    // Track applied pattern signal ONLY if this pattern was actually used
+    const isUsedPattern = usedPatterns && usedPatterns.includes(id);
     if (isUsedPattern) {
-      // Check if applied_pattern signal already exists to avoid duplicates
-      if (!updatedSourceRef.includes('applied_pattern:')) {
-        updatedSourceRef = `${updatedSourceRef}|applied_pattern:+1`;
-      }
-    }
-
-    // Track competing group for causality evaluation
-    // Use runId from entry if not passed directly
-    const entryRunId = entry.runId || runId;
-    if (entryRunId && !updatedSourceRef.includes(`competing_group:${entryRunId}`)) {
-      updatedSourceRef = `${updatedSourceRef}|competing_group:${entryRunId}`;
+      updatedSourceRef = `${updatedSourceRef}|applied_pattern:+1`;
     }
 
     // Track winner/loser for competition tracking
-    // The winning pattern (selected/used) gets win/loss signal
-    const isWinningPattern = isUsedPattern;
-    if (isWinningPattern) {
+    // Only for primary pattern (the one that "won" this decision)
+    const isPrimaryPattern = primaryPatternId !== null && id === primaryPatternId;
+    if (isPrimaryPattern) {
       if (outcome === 'success') {
-        // Winner gets win
-        if (!updatedSourceRef.includes('pattern_win:')) {
-          updatedSourceRef = `${updatedSourceRef}|pattern_win:+1`;
-        }
+        updatedSourceRef = `${updatedSourceRef}|pattern_win:+1`;
       } else if (outcome === 'failure') {
-        // Winner gets loss (it was used but failed)
-        if (!updatedSourceRef.includes('pattern_loss:')) {
-          updatedSourceRef = `${updatedSourceRef}|pattern_loss:+1`;
-        }
+        updatedSourceRef = `${updatedSourceRef}|pattern_loss:+1`;
       }
     }
 
-    // Confidence correction: compare suggested outcome with actual outcome
-    const suggestedMatch = updatedSourceRef.match(/suggested:(\w+)/);
-    if (suggestedMatch && !updatedSourceRef.includes('confidence_adjusted:')) {
-      const suggested = suggestedMatch[1];
-      const adjustment = suggested === outcome ? '+1' : '-1';
-      updatedSourceRef = `${updatedSourceRef}|confidence_adjusted:${adjustment}`;
+    // Track competing group (only once per runId)
+    const entryRunId = runId;
+    if (entryRunId && isUsedPattern && !updatedSourceRef.includes(`competing_group:${entryRunId}`)) {
+      updatedSourceRef = `${updatedSourceRef}|competing_group:${entryRunId}`;
     }
   }
 
@@ -468,9 +711,9 @@ function markOutcome(id, outcome, runId = null) {
   return { id, outcome, updated: true };
 }
 
+// Get learning quality
 function getLearningQuality(entry) {
   const quality = entry.learning_quality || {};
-
   return {
     signalStrength: Number(quality.signal_strength ?? 1),
     generality: Number(quality.generality ?? 1),
@@ -481,80 +724,21 @@ function getLearningQuality(entry) {
   };
 }
 
-function getLearningQualityBoost(entry) {
-  const q = getLearningQuality(entry);
-
-  const boost =
-    q.signalStrength * 0.4 +
-    q.generality * 0.3 +
-    q.reproducibility * 0.5 +
-    (q.userConfirmed ? 1.5 : 0);
-
-  const riskPenalty = q.failureSafe ? 0 : 2;
-
-  return boost - riskPenalty;
-}
-
-// Pattern Validation Gate: assess pattern credibility
-function getValidationScore(entry) {
-  const content = entry.content || '';
-
-  let score = 0;
-
-  // Positive signals
-  if (/tested|verified|confirmed|validated/i.test(content)) score += 2;
-  if (/repeated|consistent/i.test(content)) score += 1;
-
-  // Negative signals
-  if (/temporary|workaround|hack|quick fix/i.test(content)) score -= 2;
-  if (/uncertain|guess|maybe|likely/i.test(content)) score -= 1;
-
-  return score;
-}
-
-// Causality Correlation: detect patterns that actually cause correct outcomes
-// Now measures: successCount / appliedCount where appliedCount is ONLY from actual usage
-function getCausalityScore(entry) {
-  const sourceRef = entry.source_ref || '';
-
-  const applied = (sourceRef.match(/applied_pattern:\+1/g) || []).length;
-  const success = (sourceRef.match(/pattern_success:\+1/g) || []).length;
-
-  if (applied === 0) return 0;
-
-  return success / applied;
-}
-
-// Pattern similarity clustering
-
-function getPatternSimilarity(a, b) {
-  const tokensA = tokenize(a.content);
-  const tokensB = tokenize(b.content);
-
-  if (tokensA.size === 0 || tokensB.size === 0) return 0;
-
-  let overlap = 0;
-  for (const t of tokensA) {
-    if (tokensB.has(t)) overlap++;
-  }
-
-  const union = new Set([...tokensA, ...tokensB]).size;
-
-  return overlap / union;
-}
-
+// Build context from recalled patterns
 function buildContext(recall) {
   const tag = e => e.tags || '';
   return {
     successfulPatterns: recall.filter(e => tag(e).includes('outcome:success')),
-    failedPatterns:     recall.filter(e => tag(e).includes('outcome:failure')),
-    neutralContext:     recall.filter(e => !tag(e).includes('outcome:success') && !tag(e).includes('outcome:failure')),
+    failedPatterns: recall.filter(e => tag(e).includes('outcome:failure')),
+    neutralContext: recall.filter(e =>
+      !tag(e).includes('outcome:success') && !tag(e).includes('outcome:failure')
+    ),
   };
 }
 
+// Build execution prompt
 function buildExecutionPrompt(prompt, context) {
   const lines = [];
-
   if (context.successfulPatterns.length > 0) {
     lines.push('[MEMORY CONTEXT]');
     lines.push('REQUIRED BEHAVIOR:');
@@ -575,12 +759,12 @@ function buildExecutionPrompt(prompt, context) {
     context.neutralContext.forEach(e =>
       lines.push(`  - ${e.content} (score: ${e.score != null ? e.score.toFixed(2) : 'n/a'})`));
   }
-
   if (lines.length) lines.push('');
   lines.push(`[CURRENT TASK]: ${prompt}`);
   return lines.join('\n');
 }
 
+// Classify outcome from execution result
 function classifyOutcome(result) {
   if (!result)
     return { suggested_outcome: 'unknown', suggestion_reason: 'no_result', suggestion_confidence: 'low' };
@@ -601,6 +785,7 @@ function classifyOutcome(result) {
   return { suggested_outcome: 'unknown', suggestion_reason: 'no_signal', suggestion_confidence: 'low' };
 }
 
+// Get pending outcomes for approval
 function getPendingOutcomes(limit = 20) {
   const database = getDb();
   const rows = database.prepare(`
@@ -617,17 +802,18 @@ function getPendingOutcomes(limit = 20) {
     const rsn = (r.source_ref || '').match(/reason:(\w+)/);
     const conf = (r.source_ref || '').match(/confidence:(\w+)/);
     return {
-      id:                r.id,
-      content_preview:   r.content.substring(0, 120),
+      id: r.id,
+      content_preview: r.content.substring(0, 120),
       suggested_outcome: sug ? sug[1] : null,
       suggestion_reason: rsn ? rsn[1] : null,
       suggestion_confidence: conf ? conf[1] : null,
-      source_ref:        r.source_ref,
-      created_at:        r.created_at,
+      source_ref: r.source_ref,
+      created_at: r.created_at,
     };
   });
 }
 
+// Get outcome suggestion for single entry
 function getOutcomeSuggestion(id) {
   const database = getDb();
   const row = database.prepare(
@@ -644,6 +830,7 @@ function getOutcomeSuggestion(id) {
   return { id: row.id, suggested_outcome: match[1] };
 }
 
+// Batch approve outcomes
 function approveOutcomes(filter = null, dryRun = false, confidenceFilter = null) {
   const valid = ['success', 'failure', 'unknown'];
   if (filter !== null && !valid.includes(filter))
@@ -676,6 +863,7 @@ function approveOutcomes(filter = null, dryRun = false, confidenceFilter = null)
   return { total_processed: targets.length, total_applied: dryRun ? 0 : applied, breakdown };
 }
 
+// Export all functions
 module.exports = {
   writeMemory,
   queryMemory,
@@ -692,12 +880,15 @@ module.exports = {
   getLearningQualityBoost,
   generateMemoryPattern,
   patternToString,
-  getPromotionLevel,
-  getPromotionBoost,
-  getDemotionPenalty,
   getPromotionLevelWithCounts,
+  getPromotionBoost,
   getDemotionPenaltyWithCounts,
   tokenize,
   getPatternSimilarity,
-  getWinRate
+  getValidationScore,
+  getClusterValidationScore,
+  getCausalityScore,
+  getWinRate,
+  getSignalCounts,
+  clamp
 };
