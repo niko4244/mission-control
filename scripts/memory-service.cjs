@@ -185,7 +185,7 @@ function memoryStatus() {
   };
 }
 
-function scoreEntry(entry, prompt, taskId, now, allEntries = []) {
+function scoreEntry(entry, prompt, taskId, now, allEntries = [], runId = null) {
   const stopwords = new Set([
     'the','is','and','to','a','of','in','for','on','with','test','memory'
   ]);
@@ -265,6 +265,18 @@ function scoreEntry(entry, prompt, taskId, now, allEntries = []) {
   // Cluster boost
   const clusterBoost = Math.min(2, clusterSize * 0.5);
 
+  // Exploration vs Exploitation Balance
+  const explorationChance = 0.15;
+  const explorationApplied = Math.random() < explorationChance;
+  const explorationBoost = explorationApplied ? 0.3 : 0;
+
+  // Boost underused patterns (fewer than 2 total usages)
+  const totalUsage = clusterSuccessCount + clusterFailureCount;
+  const explorationBoostForUnderused = totalUsage < 2 ? 1 : 0;
+
+  // Penalize overused patterns (more than 10 total usages)
+  const saturationPenalty = totalUsage > 10 ? -0.5 : 0;
+
   const validationScore = getValidationScore(entry);
   const validationPenalty = validationScore < 0 ? validationScore * 2 : 0;
 
@@ -283,7 +295,7 @@ function scoreEntry(entry, prompt, taskId, now, allEntries = []) {
     winRate < 0.4 ? -1 :
     0;
 
-  const finalScore = score + learningQualityBoost + failureBoost + successDampening + promotionBoost + demotionPenalty + clusterBoost + validationPenalty + causalityBoost + competitionBoost;
+  const finalScore = score + learningQualityBoost + failureBoost + successDampening + promotionBoost + demotionPenalty + clusterBoost + validationPenalty + causalityBoost + competitionBoost + explorationBoost + explorationBoostForUnderused + saturationPenalty;
 
   // Block unsafe patterns: force demotion if validation score indicates unsafe content
   let forceDemote = false;
@@ -317,7 +329,12 @@ function scoreEntry(entry, prompt, taskId, now, allEntries = []) {
     causality_score: causalityScore,
     causality_boost: causalityBoost,
     win_rate: winRate,
-    competition_boost: competitionBoost
+    competition_boost: competitionBoost,
+    exploration_applied: explorationApplied,
+    exploration_boost: explorationBoost,
+    exploration_boost_for_underused: explorationBoostForUnderused,
+    saturation_penalty: saturationPenalty,
+    runId: runId
   };
 }
 
@@ -354,7 +371,7 @@ function recallMemory(agent, taskId, prompt, runId = null, limit = 3) {
 
   const now = Math.floor(Date.now() / 1000);
   const scored = candidates
-    .map(e => ({ ...e, ...scoreEntry(e, prompt, taskId, now, candidates) }))
+    .map(e => ({ ...e, ...scoreEntry(e, prompt, taskId, now, candidates, runId) }))
     .filter(e => (e.contentMatch > 0 || e.phraseMatch > 0) && e.score > 1.5)
     .sort((a, b) => b.score - a.score);
 
@@ -412,9 +429,10 @@ function markOutcome(id, outcome, runId = null) {
     }
 
     // Track competing group for causality evaluation
-    // Mark all patterns considered in this run as competing
-    if (runId && !updatedSourceRef.includes(`competing_group:${runId}`)) {
-      updatedSourceRef = `${updatedSourceRef}|competing_group:${runId}`;
+    // Use runId from entry if not passed directly
+    const entryRunId = entry.runId || runId;
+    if (entryRunId && !updatedSourceRef.includes(`competing_group:${entryRunId}`)) {
+      updatedSourceRef = `${updatedSourceRef}|competing_group:${entryRunId}`;
     }
 
     // Track winner/loser for competition tracking
