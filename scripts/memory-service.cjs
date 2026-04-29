@@ -234,11 +234,12 @@ function scoreEntry(entry, prompt, taskId, now) {
   // Success dampening for anti-pattern priority
   const successDampening = !isFailureMemory && /success|fixed|resolved/i.test(entry.content) ? -0.5 : 0;
 
-  // Promotion level system
+  // Promotion level system (dynamic based on usage signals)
   const promotionLevel = getPromotionLevel(entry);
   const promotionBoost = getPromotionBoost(promotionLevel);
+  const demotionPenalty = getDemotionPenalty(entry);
 
-  const finalScore = score + learningQualityBoost + failureBoost + successDampening + promotionBoost;
+  const finalScore = score + learningQualityBoost + failureBoost + successDampening + promotionBoost + demotionPenalty;
 
   return {
     score: finalScore,
@@ -252,6 +253,9 @@ function scoreEntry(entry, prompt, taskId, now) {
     success_dampening: successDampening,
     promotion_level: promotionLevel,
     promotion_boost: promotionBoost,
+    demotion_penalty: demotionPenalty,
+    success_count: (sourceRef.match(/pattern_success:\+1/g) || []).length,
+    failure_count: (sourceRef.match(/pattern_failure:\+1/g) || []).length,
     is_failure_memory: isFailureMemory
   };
 }
@@ -287,10 +291,19 @@ function markOutcome(id, outcome) {
     ? current.replace(/outcome:\w+/, `outcome:${outcome}`)
     : `${current},outcome:${outcome}`;
 
-  // Confidence correction: compare suggested outcome with actual outcome
+  // Track usage signals in source_ref
   let updatedSourceRef = row.source_ref;
-  if (row.source_ref) {
-    const suggestedMatch = row.source_ref.match(/suggested:(\w+)/);
+  if (updatedSourceRef) {
+    // Append pattern usage signal
+    const signal = outcome === 'success' ? 'pattern_success:+1' : 'pattern_failure:+1';
+
+    // Check if signal already exists to avoid duplicates
+    if (!updatedSourceRef.includes(`pattern_${outcome}:+1`)) {
+      updatedSourceRef = `${updatedSourceRef}|${signal}`;
+    }
+
+    // Confidence correction: compare suggested outcome with actual outcome
+    const suggestedMatch = updatedSourceRef.match(/suggested:(\w+)/);
     if (suggestedMatch && !updatedSourceRef.includes('confidence_adjusted:')) {
       const suggested = suggestedMatch[1];
       const adjustment = suggested === outcome ? '+1' : '-1';
@@ -336,9 +349,17 @@ function getPromotionLevel(entry) {
   const sourceRef = entry.source_ref || '';
   const tags = entry.tags || '';
 
-  if (/promotion:core_rule/i.test(sourceRef) || /promotion:core_rule/i.test(tags)) return 'core_rule';
-  if (/promotion:validated_pattern/i.test(sourceRef) || /promotion:validated_pattern/i.test(tags)) return 'validated_pattern';
-  if (/promotion:candidate_pattern/i.test(sourceRef) || /promotion:candidate_pattern/i.test(tags)) return 'candidate_pattern';
+  // Compute counts dynamically from source_ref
+  const successCount = (sourceRef.match(/pattern_success:\+1/g) || []).length;
+  const failureCount = (sourceRef.match(/pattern_failure:\+1/g) || []).length;
+
+  // Demote if multiple failures observed
+  if (failureCount >= 2) return 'observation';
+
+  // Promote based on success count
+  if (successCount >= 5 && failureCount === 0) return 'core_rule';
+  if (successCount >= 3 && failureCount === 0) return 'validated_pattern';
+  if (successCount >= 2) return 'candidate_pattern';
 
   return 'observation';
 }
@@ -351,6 +372,19 @@ function getPromotionBoost(level) {
     case 'observation':
     default: return 0;
   }
+}
+
+function getDemotionPenalty(entry) {
+  const sourceRef = entry.source_ref || '';
+  const successCount = (sourceRef.match(/pattern_success:\+1/g) || []).length;
+  const failureCount = (sourceRef.match(/pattern_failure:\+1/g) || []).length;
+
+  // Apply demotion penalty if failures outnumber successes
+  if (failureCount > successCount) {
+    return -2;
+  }
+
+  return 0;
 }
 
 function buildContext(recall) {
@@ -503,5 +537,6 @@ module.exports = {
   generateMemoryPattern,
   patternToString,
   getPromotionLevel,
-  getPromotionBoost
+  getPromotionBoost,
+  getDemotionPenalty
 };
