@@ -95,7 +95,14 @@ function scoreEntry(entry, prompt, taskId, now) {
   const minusMatches = (sourceRef.match(/confidence_adjusted:\-1/g) || []).length;
   const confidenceScore = plusMatches - minusMatches;
 
-  const score = contentMatch * 2 + recency + taskBoost + outcomeWeight + confidenceWeight + phraseMatch + (confidenceScore * 0.3);
+  // Apply half-life decay to prevent old patterns from dominating
+  const ageSeconds = Math.max(0, now - entry.created_at);
+  const halfLifeDays = 30;
+  const halfLifeSeconds = halfLifeDays * 86400;
+  const decayFactor = Math.pow(0.5, ageSeconds / halfLifeSeconds);
+  const effectiveConfidenceScore = confidenceScore * decayFactor;
+
+  const score = contentMatch * 2 + recency + taskBoost + outcomeWeight + confidenceWeight + phraseMatch + (effectiveConfidenceScore * 0.3);
   return { score, contentMatch, phraseMatch, confidence_score: confidenceScore };
 }
 
