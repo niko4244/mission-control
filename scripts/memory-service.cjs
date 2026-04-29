@@ -103,7 +103,19 @@ function scoreEntry(entry, prompt, taskId, now) {
   const effectiveConfidenceScore = confidenceScore * decayFactor;
 
   const score = contentMatch * 2 + recency + taskBoost + outcomeWeight + confidenceWeight + phraseMatch + (effectiveConfidenceScore * 0.3);
-  return { score, contentMatch, phraseMatch, confidence_score: confidenceScore };
+
+  const learningQualityBoost = getLearningQualityBoost(entry);
+  const finalScore = score + learningQualityBoost;
+
+  return {
+    score: finalScore,
+    contentMatch,
+    phraseMatch,
+    confidence_score: confidenceScore,
+    effective_confidence_score: effectiveConfidenceScore,
+    confidence_decay_factor: decayFactor,
+    learning_quality_boost: learningQualityBoost
+  };
 }
 
 function recallMemory(agent, taskId, prompt, limit = 3) {
@@ -153,6 +165,33 @@ function markOutcome(id, outcome) {
   ).run(updatedTags, updatedSourceRef, id);
 
   return { id, outcome, updated: true };
+}
+
+function getLearningQuality(entry) {
+  const quality = entry.learning_quality || {};
+
+  return {
+    signalStrength: Number(quality.signal_strength ?? 1),
+    generality: Number(quality.generality ?? 1),
+    reproducibility: Number(quality.reproducibility ?? 1),
+    userConfirmed: Boolean(quality.user_confirmed),
+    failureSafe: quality.failure_safe !== false,
+    lessonType: quality.lesson_type || 'observation'
+  };
+}
+
+function getLearningQualityBoost(entry) {
+  const q = getLearningQuality(entry);
+
+  const boost =
+    q.signalStrength * 0.4 +
+    q.generality * 0.3 +
+    q.reproducibility * 0.5 +
+    (q.userConfirmed ? 1.5 : 0);
+
+  const riskPenalty = q.failureSafe ? 0 : 2;
+
+  return boost - riskPenalty;
 }
 
 function buildContext(recall) {
@@ -288,4 +327,18 @@ function approveOutcomes(filter = null, dryRun = false, confidenceFilter = null)
   return { total_processed: targets.length, total_applied: dryRun ? 0 : applied, breakdown };
 }
 
-module.exports = { writeMemory, queryMemory, memoryStatus, recallMemory, markOutcome, buildContext, buildExecutionPrompt, classifyOutcome, getPendingOutcomes, getOutcomeSuggestion, approveOutcomes };
+module.exports = {
+  writeMemory,
+  queryMemory,
+  memoryStatus,
+  recallMemory,
+  markOutcome,
+  buildContext,
+  buildExecutionPrompt,
+  classifyOutcome,
+  getPendingOutcomes,
+  getOutcomeSuggestion,
+  approveOutcomes,
+  getLearningQuality,
+  getLearningQualityBoost
+};
