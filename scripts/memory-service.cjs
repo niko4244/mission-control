@@ -56,10 +56,8 @@ function tokenize(text) {
     if (!stopwords.has(w)) {
       if (importantTerms.has(w)) {
         tokens.add(w); // Keep important terms
-      } else if (importantTerms.size > 0 && Math.random() < 0.3) {
-        // Randomly keep some other terms for variety
-        tokens.add(w);
       }
+      // No random tokenization - deterministic only
     }
   }
   return tokens;
@@ -394,7 +392,8 @@ function scoreEntry(entry, prompt, taskId, now, allEntries = []) {
     ? words.filter(w => haystack.includes(w)).length / words.length
     : 0;
 
-  const recency = 1 / (1 + (now - entry.created_at) / 86400);
+  const createdAt = entry.created_at || now;
+  const recency = 1 / (1 + (now - createdAt) / 86400);
   const taskBoost = entry.task_id === Number(taskId) ? 0.5 : 0;
 
   const outcomeMatch = (entry.tags || '').match(/outcome:(success|failure|unknown)/);
@@ -411,7 +410,7 @@ function scoreEntry(entry, prompt, taskId, now, allEntries = []) {
   const confidenceScore = signalCounts.successCount - signalCounts.failureCount;
 
   // Apply half-life decay to prevent old patterns from dominating
-  const ageSeconds = Math.max(0, now - entry.created_at);
+  const ageSeconds = Math.max(0, now - createdAt);
   const halfLifeDays = 30;
   const halfLifeSeconds = halfLifeDays * 86400;
   const decayFactor = Math.pow(0.5, ageSeconds / halfLifeSeconds);
@@ -434,12 +433,20 @@ function scoreEntry(entry, prompt, taskId, now, allEntries = []) {
   const successDampening = !isFailureMemory && /success|fixed|resolved/i.test(entry.content) ? -0.5 : 0;
 
   // Pattern similarity clustering with deduplication
-  const similarEntries = allEntries.filter(e => {
-    if (e.id === entry.id) return false;
-    const similarity = getPatternSimilarity(entry, e);
-    // Cap at 5 similar entries, skip duplicates (>0.85 similarity)
-    return similarity > 0.6 && similarity <= 0.85 && similarEntries.filter(se => getPatternSimilarity(entry, se) > 0.85).length < 5;
+  // Step 1: Score all candidates for similarity
+  const scoredCandidates = allEntries
+    .map(e => ({ e, similarity: getPatternSimilarity(entry, e) }))
+    .filter(({ similarity }) => similarity > 0.6 && similarity <= 0.85);
+
+  // Step 2: Deduplicate near-duplicates (>0.85 similarity)
+  const deduped = scoredCandidates.filter(({ e }) => {
+    const isDuplicate = scoredCandidates
+      .filter(({ e: se }) => se.id !== e.id && getPatternSimilarity(entry, se) > 0.85)
+      .length >= 5;
+    return !isDuplicate;
   }).slice(0, 5);
+
+  const similarEntries = deduped.map(({ e }) => e);
 
   // Aggregate cluster counts from unique entries only
   const clusterSuccessCount =
@@ -697,10 +704,13 @@ function markOutcome(id, outcome, meta = {}) {
       }
     }
 
-    // Track competing group (only once per runId)
+    // Track competing group for all used patterns in this run
     const entryRunId = runId;
-    if (entryRunId && isUsedPattern && !updatedSourceRef.includes(`competing_group:${entryRunId}`)) {
-      updatedSourceRef = `${updatedSourceRef}|competing_group:${entryRunId}`;
+    if (entryRunId && isUsedPattern) {
+      // Add competing_group signal if not already present for this run
+      if (!updatedSourceRef.includes(`competing_group:${entryRunId}`)) {
+        updatedSourceRef = `${updatedSourceRef}|competing_group:${entryRunId}`;
+      }
     }
   }
 
