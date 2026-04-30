@@ -2,13 +2,13 @@
 /**
  * mc-memory.cjs — Mission Control memory CLI
  *
- * Commands:
- *   mc memory recall "<prompt>"
- *   mc memory audit "<prompt>"
- *   mc memory write "<content>"
- *   mc memory outcome <id> <outcome>
- *   mc memory status
- *   mc memory health
+ * Subcommands:
+ *   recall  — Recall memories for a prompt
+ *   audit   — Audit top memories with full info
+ *   write   — Write a new memory entry
+ *   outcome — Mark outcome for a memory
+ *   status   — Show memory status
+ *   health   — Health check
  */
 
 'use strict';
@@ -16,400 +16,451 @@
 const path = require('node:path');
 const memoryApi = require('./memory-api.cjs');
 
-// Parse arguments
-const args = process.argv.slice(2);
+// Database path
+const HOMEDIR = process.env.HOME || process.env.USERPROFILE || '';
+const DB_PATH = process.env.MISSION_CONTROL_DATA_DIR
+  ? path.join(process.env.MISSION_CONTROL_DATA_DIR, '.data', 'mission-control.db')
+  : path.join(HOMEDIR, 'mission-control', '.data', 'mission-control.db');
 
-function parseOptions(args) {
-  const options = {};
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--agent') {
-      options.agent = args[++i] || 'cli';
-    } else if (args[i] === '--task-id') {
-      options.taskId = args[++i];
-    } else if (args[i] === '--limit') {
-      options.limit = args[++i] || 3;
-    } else if (args[i] === '--run-id') {
-      options.runId = args[++i];
-    } else if (args[i] === '--explore') {
-      options.explore = true;
-    } else if (args[i] === '--raw-execution-log') {
-      options.rawExecutionLog = true;
-    }
-  }
-  return options;
-}
-
-function extractPrompt(args, command) {
-  // Find the prompt: for recall/audit/write it's the first non-option argument after the command
-  const idx = args.indexOf(command) + 1;
-  if (args[idx] && !args[idx].startsWith('-')) {
-    return args[idx];
-  }
-  return '';
-}
-
+/**
+ * Print usage
+ */
 function printUsage() {
   console.log(`
 Mission Control Memory CLI
 
-Usage: mc memory <command> [options]
+Usage: node mc-memory.js <command> [options]
 
 Commands:
-  recall "<prompt>"       Recall memories for a prompt
-  audit "<prompt>"        Audit top-ranked memories with debug info
-  write "<content>"       Write a new memory entry
-  outcome <id> <outcome>  Mark outcome for a memory
-  status                  Show memory status
-  health                  Show health check
+  recall <prompt> [options]   Recall memories for a prompt
+  audit <prompt> [options]    Audit top memories with full info
+  write <content> [options]   Write a new memory entry
+  outcome <id> <outcome>      Mark outcome for a memory
+  status                      Show memory status
+  health                      Health check
 
-Options for recall/audit:
-  --agent <name>          Agent name (default: 'cli')
-  --task-id <id>          Task ID
-  --limit <n>             Number of results (default: 3 for recall, 10 for audit)
-  --run-id <id>           Run ID
-  --explore               Explore mode: include underused patterns
-  --raw-execution-log     Write raw execution log instead of pattern
+Recall options:
+  --agent <agent>             Agent name (required)
+  --limit <n>                 Limit results (default: 3)
+  --run-id <id>               Run ID for attribution
+  --explore                   Explore mode
+  --random-explore            Random exploration
+
+Audit options:
+  --limit <n>                 Limit results (default: 10)
+  --run-id <id>               Run ID for attribution
+
+Write options:
+  --source <source>           Source (default: cli)
+  --category <category>       Category (default: execution)
+  --agent <agent>             Agent name
+  --tags <tags>               Tags
+  --confidence <n>            Confidence (0-1)
+  --source-ref <ref>          Source reference string
+
+Outcome options:
+  --used-patterns <ids>       Comma-separated list of used pattern IDs
+  --primary-pattern-id <id>   Primary pattern ID
+  --run-id <id>               Run ID for attribution
 
 Examples:
-  mc memory recall "validate input" --agent hermes --limit 3
-  mc memory audit "handle long operations" --agent hermes --limit 10
-  mc memory write "Always validate inputs..." --source cli --category execution
-  mc memory outcome 3 success --used-patterns 1,2,3 --primary-pattern-id 1
-  mc memory status
-  mc memory health
+  node mc-memory.js recall "validate input" --agent hermes --limit 3
+  node mc-memory.js audit "handle timeout" --agent hermes --limit 10
+  node mc-memory.js write "Always validate inputs..." --source cli --category execution
+  node mc-memory.js outcome 3 success --used-patterns 1,2,3 --primary-pattern-id 1 --run-id run_abc
+  node mc-memory.js status
+  node mc-memory.js health
 `);
 }
 
-function formatTable(data) {
-  const lines = [];
-  const headers = Object.keys(data[0] || {}).filter(k => k !== 'id'); // Skip id for header
+/**
+ * Format memory entries for table display
+ */
+function formatMemories(memories, limit = 3) {
+  const mems = memories.slice(0, limit);
+  if (mems.length === 0) {
+    return { header: '', rows: [] };
+  }
 
-  // Header row
-  const headerStr = headers.map(h => h.padEnd(20)).join('  ');
-  lines.push(headerStr);
+  // Build rows with simple formatting
+  const rows = mems.map(m => {
+    const content = m.content.slice(0, 60);
+    const score = m.score != null ? m.score.toFixed(2) : 'n/a';
+    const level = m.promotion_level || 'observation';
+    const valid = m.validation_score > 0 ? '+' + m.validation_score.toFixed(1) : m.validation_score.toFixed(1);
+    const clusterSuccess = m.cluster_success_count > 0 ? m.cluster_success_count.toString() : '';
+    const clusterFailure = m.cluster_failure_count > 0 ? m.cluster_failure_count.toString() : '';
+    const causality = m.causality_score > 0 ? m.causality_score.toFixed(2) : '';
+    const explanation = m.explanation || 'Ranked by score';
 
-  // Separator
-  const sep = '─'.repeat(headerStr.length);
-  lines.push(sep);
+    return `${content.padEnd(60)} | ${score.padStart(8)} | ${level.padStart(15)} | ${valid.padStart(7)} | ${clusterSuccess.padEnd(10)} | ${clusterFailure.padEnd(10)} | ${causality.padEnd(10)} | ${explanation}`;
+  });
 
-  // Data rows
-  data.forEach(row => {
-    const rowStr = headers.map(h => {
-      const val = row[h];
-      if (h === 'explanation') {
-        // Truncate long explanations
-        return String(val).substring(0, 20).padEnd(20);
+  // Build header
+  const header = `Content | Score  | Level           | Valid  | ClustSuccess | ClustFailure | Causality | Explanation`;
+
+  return { header, rows };
+}
+
+/**
+ * Format single memory for table display
+ */
+function formatSingleMemory(memory) {
+  if (!memory) return { header: '', rows: [] };
+
+  // Build rows with simple formatting
+  const rows = [
+    `ID: ${memory.id}`,
+    `Content: ${memory.content || ''}`,
+    `Tags: ${memory.tags || ''}`,
+    `Score: ${memory.score != null ? memory.score.toFixed(2) : 'n/a'}`,
+    `Promotion Level: ${memory.promotion_level || 'observation'}`,
+    `Validation Score: ${memory.validation_score > 0 ? '+' + memory.validation_score.toFixed(1) : memory.validation_score.toFixed(1)}`,
+    `Cluster Success Count: ${memory.cluster_success_count > 0 ? memory.cluster_success_count.toString() : ''}`,
+    `Cluster Failure Count: ${memory.cluster_failure_count > 0 ? memory.cluster_failure_count.toString() : ''}`,
+    `Causality Score: ${memory.causality_score > 0 ? '+' + memory.causality_score.toFixed(2) : ''}`,
+    `Failure Boost: ${memory.failure_boost > 0 ? '+' + memory.failure_boost.toFixed(1) : ''}`,
+    `Competition Boost: ${memory.competition_boost > 0 ? '+' + memory.competition_boost.toFixed(1) : ''}`,
+    `Explanation: ${memory.explanation || 'N/A'}`,
+    `Source Ref: ${memory.source_ref || 'N/A'}`
+  ];
+
+  return { header: 'Memory Entry Details', rows };
+}
+
+/**
+ * Main handler
+ */
+async function main() {
+  const args = process.argv.slice(2);
+
+  if (args.length === 0) {
+    printUsage();
+    process.exit(0);
+  }
+
+  const command = args[0];
+  const cmdArgs = args.slice(1);
+
+  switch (command) {
+    case 'recall': {
+      if (cmdArgs.length === 0) {
+        console.error('Error: recall requires a prompt');
+        printUsage();
+        process.exit(1);
       }
-      if (h === 'content' || h === 'source_ref') {
-        // Truncate content
-        return String(val).substring(0, 20).padEnd(20);
+
+      const prompt = cmdArgs[0];
+      let agent = cmdArgs[1];
+      let limit = 3;
+      let runId = null;
+      let explore = false;
+      let randomExplore = false;
+
+      // Parse options
+      for (let i = 2; i < cmdArgs.length; i++) {
+        const arg = cmdArgs[i];
+        if (arg === '--agent' && cmdArgs[i + 1]) {
+          agent = cmdArgs[++i];
+        } else if (arg === '--limit' && cmdArgs[i + 1]) {
+          limit = parseInt(cmdArgs[++i], 10);
+        } else if (arg === '--run-id' && cmdArgs[i + 1]) {
+          runId = cmdArgs[++i];
+        } else if (arg === '--explore') {
+          explore = true;
+        } else if (arg === '--random-explore') {
+          randomExplore = true;
+        } else if (arg.startsWith('--')) {
+          console.error(`Unknown option: ${arg}`);
+          process.exit(1);
+        }
       }
-      if (h === 'tags') {
-        return String(val).substring(0, 20).padEnd(20);
+
+      if (!agent) {
+        console.error('Error: --agent is required');
+        printUsage();
+        process.exit(1);
       }
-      return String(val).padEnd(20);
-    }).join('  ');
-    lines.push(rowStr);
-  });
 
-  return lines.join('\n');
-}
+      const result = await memoryApi.recall(agent, { prompt, limit, runId, explore, randomExplore });
 
-function recall(prompt, options) {
-  const {
-    agent = 'cli',
-    taskId = null,
-    limit = 3,
-    runId = null,
-    explore = false
-  } = options;
+      // Print header
+      console.log();
+      console.log(`=== Memory Recall for: "${prompt}" ===`);
+      console.log(`Run ID: ${runId || 'N/A'}`);
+      console.log(`Used Patterns: ${result.usedPatterns.join(', ') || 'none'}`);
+      console.log(`Found: ${result.selected.length} memories`);
+      console.log();
 
-  if (!prompt) {
-    console.error('Error: prompt is required');
-    printUsage();
-    process.exit(1);
-  }
+      // Print memories
+      const { header, rows } = formatMemories(result.selected, limit);
+      console.log(header);
+      console.log('-'.repeat(header.length));
+      rows.forEach(row => console.log(row));
+      console.log();
+      console.log(`Pruned: ${result.pruned_count}, Merged: ${result.merged_count}`);
+      console.log();
 
-  console.log(`\n=== MEMORY RECALL: "${prompt}" ===\n`);
+      process.exit(0);
+    }
 
-  const result = memoryApi.recall(agent, {
-    prompt,
-    taskId,
-    limit: parseInt(limit),
-    runId,
-    explore
-  });
+    case 'audit': {
+      if (cmdArgs.length === 0) {
+        console.error('Error: audit requires a prompt');
+        printUsage();
+        process.exit(1);
+      }
 
-  if (result.selected.length === 0) {
-    console.log('No memories found for this prompt.');
-    console.log(`Used patterns: ${result.usedPatterns.join(', ') || 'none'}`);
-    return result;
-  }
+      const prompt = cmdArgs[0];
+      let agent = cmdArgs[1];
+      let limit = 10;
+      let runId = null;
 
-  // Print table
-  const tableData = result.selected.map((e, i) => ({
-    'Rank': i + 1,
-    'Score': e.score.toFixed(2),
-    'Promotion': e.promotion_level,
-    'Validation': e.validation_score.toFixed(2),
-    'Causality': e.causality_score.toFixed(2),
-    'Cluster': e.cluster_success_count + ' suc',
-    'Preview': e.content.substring(0, 30) + '...',
-    'Explanation': e.explanation
-  }));
+      // Parse options
+      for (let i = 2; i < cmdArgs.length; i++) {
+        const arg = cmdArgs[i];
+        if (arg === '--agent' && cmdArgs[i + 1]) {
+          agent = cmdArgs[++i];
+        } else if (arg === '--limit' && cmdArgs[i + 1]) {
+          limit = parseInt(cmdArgs[++i], 10);
+        } else if (arg === '--run-id' && cmdArgs[i + 1]) {
+          runId = cmdArgs[++i];
+        } else if (arg.startsWith('--')) {
+          console.error(`Unknown option: ${arg}`);
+          process.exit(1);
+        }
+      }
 
-  console.log(formatTable(tableData));
-  console.log(`\nUsed patterns: ${result.usedPatterns.join(', ') || 'none'}`);
-  console.log(`Pruned: ${result.pruned_count} | Merged: ${result.merged_count}`);
+      if (!agent) {
+        console.error('Error: --agent is required');
+        printUsage();
+        process.exit(1);
+      }
 
-  return result;
-}
+      const result = await memoryApi.audit(agent, { prompt, limit, runId });
 
-function audit(prompt, options) {
-  const {
-    agent = 'cli',
-    taskId = null,
-    limit = 10,
-    runId = null
-  } = options;
+      // Print summary
+      console.log();
+      console.log(`=== Memory Audit for: "${prompt}" ===`);
+      console.log(`Candidates: ${result.summary.total_candidates}`);
+      console.log(`Returned: ${result.summary.returned}`);
+      console.log(`Top Score: ${result.summary.top_score.toFixed(2)}`);
+      console.log(`Warnings: ${result.summary.warning_count}`);
+      console.log();
 
-  if (!prompt) {
-    console.error('Error: prompt is required');
-    printUsage();
-    process.exit(1);
-  }
+      // Print entries
+      const { header, rows } = formatMemories(result.entries, limit);
+      console.log(header);
+      console.log('-'.repeat(header.length));
+      rows.forEach(row => console.log(row));
+      console.log();
 
-  console.log(`\n=== MEMORY AUDIT: "${prompt}" ===\n`);
+      // Print warnings
+      if (result.summary.warning_count > 0) {
+        console.log('Warnings:');
+        result.summary.warnings.forEach(w => {
+          console.log(`  [${w.severity.toUpperCase()}] Entry ${w.entryId}: ${w.reason}`);
+        });
+      }
+      console.log();
 
-  const result = memoryApi.audit(agent, {
-    prompt,
-    taskId,
-    limit: parseInt(limit),
-    runId
-  });
+      process.exit(0);
+    }
 
-  if (result.entries.length === 0) {
-    console.log('No memories found.');
-    return result;
-  }
+    case 'write': {
+      if (cmdArgs.length === 0) {
+        console.error('Error: write requires content');
+        printUsage();
+        process.exit(1);
+      }
 
-  // Print table
-  const tableData = result.entries.map((e, i) => ({
-    'Rank': i + 1,
-    'Score': e.score.toFixed(3),
-    'Promotion': e.promotion_level,
-    'Validation': e.validation_score.toFixed(2),
-    'Causality': e.causality_score.toFixed(2),
-    'Cluster': `${e.cluster_success_count}s / ${e.cluster_failure_count}f`,
-    'Preview': e.content.substring(0, 40) + '...',
-    'Explanation': e.explanation.substring(0, 60) + '...'
-  }));
+      const content = cmdArgs[0];
+      let source = 'cli';
+      let category = 'execution';
+      let agent = null;
+      let taskId = null;
+      let runId = null;
+      let tags = null;
+      let confidence = null;
+      let sourceRef = null;
+      let project = null;
+      let rawExecutionLog = false;
 
-  console.log(formatTable(tableData));
+      // Parse options
+      for (let i = 1; i < cmdArgs.length; i++) {
+        const arg = cmdArgs[i];
+        if (arg === '--source' && cmdArgs[i + 1]) {
+          source = cmdArgs[++i];
+        } else if (arg === '--category' && cmdArgs[i + 1]) {
+          category = cmdArgs[++i];
+        } else if (arg === '--agent' && cmdArgs[i + 1]) {
+          agent = cmdArgs[++i];
+        } else if (arg === '--task-id' && cmdArgs[i + 1]) {
+          taskId = cmdArgs[++i];
+        } else if (arg === '--run-id' && cmdArgs[i + 1]) {
+          runId = cmdArgs[++i];
+        } else if (arg === '--tags' && cmdArgs[i + 1]) {
+          tags = cmdArgs[++i];
+        } else if (arg === '--confidence' && cmdArgs[i + 1]) {
+          confidence = parseFloat(cmdArgs[++i]);
+        } else if (arg === '--source-ref' && cmdArgs[i + 1]) {
+          sourceRef = cmdArgs[++i];
+        } else if (arg === '--project' && cmdArgs[i + 1]) {
+          project = cmdArgs[++i];
+        } else if (arg === '--raw-execution-log') {
+          rawExecutionLog = true;
+        } else if (arg.startsWith('--')) {
+          console.error(`Unknown option: ${arg}`);
+          process.exit(1);
+        }
+      }
 
-  // Summary
-  console.log(`\nSummary:`);
-  console.log(`  Total candidates: ${result.summary.total_candidates}`);
-  console.log(`  Returned: ${result.summary.returned}`);
-  console.log(`  Pruned: ${result.summary.pruned_count}`);
-  console.log(`  Top score: ${result.summary.top_score.toFixed(2)}`);
-  console.log(`  Warnings: ${result.summary.warning_count}`);
+      const result = await memoryApi.write({
+        source,
+        category,
+        content,
+        agent,
+        taskId,
+        runId,
+        tags,
+        confidence,
+        sourceRef,
+        project,
+        rawExecutionLog
+      });
 
-  if (result.summary.warnings.length > 0) {
-    console.log(`\nWarnings:`);
-    result.summary.warnings.forEach(w => {
-      console.log(`  - Entry ${w.entryId}: ${w.reason}`);
-    });
-  }
+      console.log();
+      console.log(`Memory written with ID: ${result.id}`);
+      console.log();
 
-  return result;
-}
+      process.exit(0);
+    }
 
-function write(content, options) {
-  const {
-    source = 'cli',
-    category = 'execution',
-    agent = null,
-    taskId = null,
-    runId = null,
-    tags = null,
-    confidence = null,
-    sourceRef = null,
-    project = null,
-    rawExecutionLog = false
-  } = options;
+    case 'outcome': {
+      if (cmdArgs.length < 2) {
+        console.error('Error: outcome requires an ID and outcome (success|failure)');
+        printUsage();
+        process.exit(1);
+      }
 
-  if (!content) {
-    console.error('Error: content is required');
-    printUsage();
-    process.exit(1);
-  }
+      const id = parseInt(cmdArgs[0], 10);
+      const outcome = cmdArgs[1];
+      const usedPatterns = cmdArgs[2]?.split(',').map(n => parseInt(n.trim(), 10));
+      const primaryPatternId = cmdArgs[2]?.split(',').find(n => n.startsWith('-')) || null;
+      const runId = cmdArgs[2]?.split(',').find(n => n.startsWith('--')) || null;
 
-  console.log(`\n=== WRITING MEMORY ===`);
-  console.log(`  Source: ${source}`);
-  console.log(`  Category: ${category}`);
-  console.log(`  Content: ${content.substring(0, 50)}...`);
+      // Parse options
+      for (let i = 3; i < cmdArgs.length; i++) {
+        const arg = cmdArgs[i];
+        if (arg === '--used-patterns' && cmdArgs[i + 1]) {
+          usedPatterns = cmdArgs[++i].split(',').map(n => parseInt(n.trim(), 10));
+        } else if (arg === '--primary-pattern-id' && cmdArgs[i + 1]) {
+          primaryPatternId = parseInt(cmdArgs[++i], 10);
+        } else if (arg === '--run-id' && cmdArgs[i + 1]) {
+          runId = cmdArgs[++i];
+        } else if (arg.startsWith('--')) {
+          console.error(`Unknown option: ${arg}`);
+          process.exit(1);
+        }
+      }
 
-  const id = memoryApi.write({
-    source,
-    category,
-    content,
-    agent,
-    taskId,
-    runId,
-    tags,
-    confidence,
-    sourceRef,
-    project,
-    rawExecutionLog
-  });
+      if (!usedPatterns && !primaryPatternId) {
+        console.error('Error: either --used-patterns or --primary-pattern-id is required');
+        process.exit(1);
+      }
 
-  console.log(`\nCreated entry with id: ${id.id}`);
-  console.log(`  Source ref: ${id.source_ref || 'none'}`);
+      const result = await memoryApi.markOutcome(id, outcome, {
+        usedPatterns,
+        primaryPatternId,
+        runId
+      });
 
-  return id;
-}
+      console.log();
+      console.log(`Outcome marked for memory ${id}: ${result.outcome}`);
+      console.log(`Updated: ${result.updated}`);
+      if (result.reason) {
+        console.log(`Reason: ${result.reason}`);
+      }
+      console.log();
 
-function outcome(id, outcome, options) {
-  const {
-    usedPatterns = [],
-    primaryPatternId = null,
-    runId = null
-  } = options;
+      process.exit(0);
+    }
 
-  if (!outcome) {
-    console.error('Error: outcome is required (success|failure|unknown)');
-    printUsage();
-    process.exit(1);
-  }
+    case 'status': {
+      const result = await memoryApi.status();
 
-  if (!id) {
-    console.error('Error: memory id is required');
-    printUsage();
-    process.exit(1);
-  }
+      console.log();
+      console.log(`=== Memory Status ===`);
+      console.log(`Total memories: ${result.total_memories}`);
+      console.log();
+      console.log(`By source:`);
+      result.by_source.forEach(r => {
+        console.log(`  ${r.source}: ${r.count}`);
+      });
+      console.log();
+      console.log(`By category:`);
+      result.by_category.forEach(r => {
+        console.log(`  ${r.category}: ${r.count}`);
+      });
+      console.log();
+      console.log(`Outcome counts:`);
+      console.log(`  success: ${result.outcome_counts.success || 0}`);
+      console.log(`  failure: ${result.outcome_counts.failure || 0}`);
+      console.log(`  unknown: ${result.outcome_counts.unknown || 0}`);
+      console.log();
+      console.log(`Promotion counts:`);
+      console.log(`  core_rule: ${result.promoted_counts.core_rule || 0}`);
+      console.log(`  validated_pattern: ${result.promoted_counts.validated_pattern || 0}`);
+      console.log(`  candidate_pattern: ${result.promoted_counts.candidate_pattern || 0}`);
+      console.log(`  observation: ${result.promoted_counts.observation || 0}`);
+      console.log();
+      console.log(`Recent memories: ${result.recent_count}`);
+      if (result.warnings.length > 0) {
+        console.log();
+        console.log('Warnings:');
+        result.warnings.forEach(w => console.log(`  - ${w}`));
+      }
+      console.log();
 
-  console.log(`\n=== MARKING OUTCOME ===`);
-  console.log(`  Memory ID: ${id}`);
-  console.log(`  Outcome: ${outcome}`);
+      process.exit(0);
+    }
 
-  const result = memoryApi.markOutcome(id, outcome, {
-    usedPatterns,
-    primaryPatternId,
-    runId
-  });
+    case 'health': {
+      const result = await memoryApi.health();
 
-  if (result.updated) {
-    console.log(`  Updated: ${result.updated}`);
-    console.log(`  New tags: ${result.tags || ''}`);
-    console.log(`  Outcome tag: ${result.outcome_tag || outcome}`);
-  } else {
-    console.log(`  Reason: ${result.reason || 'unknown'}`);
-  }
+      console.log();
+      console.log(`=== Health Check ===`);
+      console.log(`Status: ${result.ok ? 'OK' : 'ISSUES DETECTED'}`);
+      console.log();
+      console.log('Checks:');
+      console.log(`  Database accessible: ${result.checks.memory_db_accessible}`);
+      console.log(`  Required exports present: ${result.checks.required_exports_present}`);
+      console.log(`  Deterministic scoring: ${result.checks.deterministic_scoring}`);
+      console.log(`  No NaN scores: ${result.checks.no_nan_score}`);
+      console.log();
 
-  return result;
-}
+      if (result.issues.length > 0) {
+        console.log('Issues:');
+        result.issues.forEach(issue => console.log(`  - ${issue}`));
+        console.log();
+        process.exit(1);
+      }
 
-function status() {
-  console.log(`\n=== MEMORY STATUS ===\n`);
+      console.log('All checks passed');
+      console.log();
 
-  const result = memoryApi.status();
+      process.exit(0);
+    }
 
-  console.log(`Total memories: ${result.total_memories}`);
-  console.log(`By source:`);
-  (result.by_source || []).forEach(row => {
-    console.log(`  ${row.source}: ${row.count}`);
-  });
-  console.log(`By category:`);
-  (result.by_category || []).forEach(row => {
-    console.log(`  ${row.category}: ${row.count}`);
-  });
-  console.log(`Outcome counts: ${JSON.stringify(result.outcome_counts)}`);
-  console.log(`Promoted counts: ${JSON.stringify(result.promoted_counts)}`);
-  console.log(`Recent count: ${result.recent_count}`);
-
-  if (result.warnings.length > 0) {
-    console.log(`Warnings:`);
-    result.warnings.forEach(w => {
-      console.log(`  - ${w}`);
-    });
-  }
-
-  return result;
-}
-
-function health() {
-  console.log(`\n=== HEALTH CHECK ===\n`);
-
-  const result = memoryApi.health();
-
-  if (result.ok) {
-    console.log(`OK - All checks passed`);
-    console.log(`  Checks:`);
-    console.log(`    - memory_db_accessible: ${result.checks.memory_db_accessible}`);
-    console.log(`    - required_exports_present: ${result.checks.required_exports_present}`);
-    console.log(`    - deterministic_scoring: ${result.checks.deterministic_scoring}`);
-    console.log(`    - no_nan_score: ${result.checks.no_nan_score}`);
-  } else {
-    console.log(`ISSUES DETECTED:`);
-    result.issues.forEach(issue => {
-      console.log(`  - ${issue}`);
-    });
-  }
-
-  return result;
-}
-
-// Parse command
-const command = args[0];
-
-if (!command) {
-  printUsage();
-  process.exit(0);
-}
-
-// Parse options
-const options = parseOptions(args);
-
-// Extract prompt
-const prompt = extractPrompt(args, command);
-
-// Handle commands
-switch (command) {
-  case 'recall':
-    recall(prompt, options);
-    break;
-  case 'audit':
-    audit(prompt, options);
-    break;
-  case 'write':
-    write(prompt, options);
-    break;
-  case 'outcome':
-    if (args.length < 3) {
-      console.error('Error: outcome requires <id> and <outcome>');
+    default: {
+      console.error(`Unknown command: ${command}`);
       printUsage();
       process.exit(1);
     }
-    const id = args[1];
-    const outcome = args[2];
-    const usedPatternsArg = args.find(a => a.startsWith('--used-patterns'))?.replace('--used-patterns=', '');
-    const usedPatterns = usedPatternsArg?.split(',').map(s => s.trim());
-    outcome(id, outcome, {
-      ...options,
-      usedPatterns,
-      'primary-pattern-id': args.find(a => a.startsWith('--primary-pattern-id'))?.replace('--primary-pattern-id=', ''),
-      runId: options['run-id']
-    });
-    break;
-  case 'status':
-    status();
-    break;
-  case 'health':
-    health();
-    break;
-  default:
-    console.error(`Unknown command: ${command}`);
-    printUsage();
-    process.exit(1);
+  }
 }
+
+main().catch(err => {
+  console.error(err);
+  process.exit(1);
+});
