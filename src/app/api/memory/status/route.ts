@@ -1,16 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { health } from '@/lib/server/memory-api-wrapper'
+import { status } from '@/lib/server/memory-api-wrapper'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 export async function GET(request: NextRequest) {
   try {
-    const data = await health()
+    const data = await status()
 
     return NextResponse.json(data, { status: 200 })
   } catch (error) {
-    console.error('Memory health error:', error)
+    console.error('Memory status error:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

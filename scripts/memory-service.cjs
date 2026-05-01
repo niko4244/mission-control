@@ -28,39 +28,21 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
-// Stopwords for similarity calculation
-const stopwords = new Set([
-  'the', 'is', 'and', 'to', 'a', 'of', 'in', 'for', 'on', 'with',
-  'test', 'memory', 'pattern', 'entry', 'usage', 'signal', 'score', 'boost'
+// Weak function words that match across unrelated entries and add no domain signal
+const weakTokens = new Set([
+  'not', 'may', 'can', 'has', 'had', 'was', 'were', 'use', 'used', 'using',
+  'multiple', 'many', 'some', 'other', 'when', 'then', 'than'
 ]);
 
-// Terms to weight higher in similarity
-const importantTerms = new Set([
-  'error', 'failed', 'failure', 'fix', 'resolved', 'test', 'timeout',
-  'crash', 'validation', 'memory', 'agent', 'cli', 'build', 'typecheck',
-  'lint', 'appliance', 'compressor', 'relay', 'thermal', 'fuse',
-  'harness', 'control', 'board', 'motor'
-]);
-
-// Tokenize with important term weighting
+// Tokenize: keep domain-meaningful tokens (length >= 4, not weak function words)
 function tokenize(text) {
-  const words = (text || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, '')
-    .split(/\s+/)
-    .filter(t => t.length > 2);
-
-  // Remove stopwords and weight important terms
-  const tokens = new Set();
-  for (const w of words) {
-    if (!stopwords.has(w)) {
-      if (importantTerms.has(w)) {
-        tokens.add(w); // Keep important terms
-      }
-      // No random tokenization - deterministic only
-    }
-  }
-  return tokens;
+  return new Set(
+    (text || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, '')
+      .split(/\s+/)
+      .filter(t => t.length >= 4 && !weakTokens.has(t))
+  );
 }
 
 // Jaccard similarity with deduplication for near-duplicates
@@ -222,6 +204,9 @@ function writeMemory(source, category, content, meta = {}) {
     rawExecutionLog = false
   } = meta;
 
+  // Always initialize source_ref so markOutcome can append signals
+  const effectiveSourceRef = sourceRef || `source:${source}`;
+
   // Generate pattern only when explicitly requested
   if (rawExecutionLog === true) {
     const pattern = generateMemoryPattern(content);
@@ -233,7 +218,7 @@ function writeMemory(source, category, content, meta = {}) {
         INSERT INTO memory_entries
           (source, category, content, task_id, agent, run_id, tags, confidence, source_ref, project, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())
-      `).run(source, category, content, taskId, agent, runId, tags, confidence, sourceRef, project);
+      `).run(source, category, content, taskId, agent, runId, tags, confidence, effectiveSourceRef, project);
       return { id: result.lastInsertRowid };
     }
 
@@ -265,7 +250,7 @@ function writeMemory(source, category, content, meta = {}) {
     INSERT INTO memory_entries
       (source, category, content, task_id, agent, run_id, tags, confidence, source_ref, project, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())
-  `).run(source, category, content, taskId, agent, runId, tags, confidence, sourceRef, project);
+  `).run(source, category, content, taskId, agent, runId, tags, confidence, effectiveSourceRef, project);
   return { id: result.lastInsertRowid };
 }
 
@@ -382,15 +367,12 @@ function memoryStatus() {
 
 // Main scoring function - deterministic, no random
 function scoreEntry(entry, prompt, taskId, now, allEntries = []) {
-  const stopwords = new Set([
-    'the', 'is', 'and', 'to', 'a', 'of', 'in', 'for', 'on', 'with',
-    'test', 'memory', 'pattern', 'entry', 'usage', 'signal', 'score', 'boost'
-  ]);
-  const words = prompt.toLowerCase().split(/\s+/).filter(w => w && !stopwords.has(w));
-  const haystack = (entry.content + ' ' + (entry.tags || '')).toLowerCase();
-  const contentMatch = words.length > 0
-    ? words.filter(w => haystack.includes(w)).length / words.length
+  const promptTokens = tokenize(prompt);
+  const entryTokens = tokenize(entry.content + ' ' + (entry.tags || ''));
+  const contentMatch = promptTokens.size > 0
+    ? [...promptTokens].filter(t => entryTokens.has(t)).length / promptTokens.size
     : 0;
+  const haystack = (entry.content + ' ' + (entry.tags || '')).toLowerCase();
 
   const createdAt = entry.created_at || now;
   const recency = 1 / (1 + (now - createdAt) / 86400);
@@ -416,7 +398,7 @@ function scoreEntry(entry, prompt, taskId, now, allEntries = []) {
   const decayFactor = Math.pow(0.5, ageSeconds / halfLifeSeconds);
   const effectiveConfidenceScore = confidenceScore * decayFactor;
 
-  const baseScore = contentMatch * 2 + recency + taskBoost + outcomeWeight + confidenceWeight + phraseMatch + (effectiveConfidenceScore * 0.3);
+  const baseScore = contentMatch * 5 + recency + taskBoost + outcomeWeight + confidenceWeight + phraseMatch + (effectiveConfidenceScore * 0.1);
 
   // Learning quality boost - defaults to zero without metadata
   const learningQualityBoost = getLearningQualityBoost(entry);
@@ -424,9 +406,9 @@ function scoreEntry(entry, prompt, taskId, now, allEntries = []) {
   // Anti-pattern priority: failure patterns rank higher
   const isFailureMemory = /anti:|avoid|do not|failure|error/i.test(entry.content);
 
-  // Confidence-aware failure boost
+  // Confidence-aware failure boost (base lowered to avoid cross-domain keyword false positives)
   const failureBoost = isFailureMemory
-    ? 0.5 + Math.min(2, Math.abs(confidenceScore))
+    ? 0.2 + Math.min(2, Math.abs(confidenceScore))
     : 0;
 
   // Success dampening for anti-pattern priority
@@ -518,6 +500,13 @@ function scoreEntry(entry, prompt, taskId, now, allEntries = []) {
     winRate < 0.4 && (clusterWinCount + clusterLossCount) >= 2 ? -1 :
     0;
 
+  // Hard penalty: zero content match means the entry is not relevant to this prompt
+  const zeroMatchPenalty = contentMatch === 0 ? -5 : 0;
+
+  // Domain penalty: suppress entries that have high learned signals but weak relevance
+  // Prevents high-signal patterns from wrong domains crowding out actual matches
+  const domainPenalty = (contentMatch < 0.25 && clusterSuccessCount > 3) ? -2 : 0;
+
   // Final score (deterministic)
   const finalScore =
     baseScore +
@@ -531,7 +520,9 @@ function scoreEntry(entry, prompt, taskId, now, allEntries = []) {
     causalityBoost +
     competitionBoost +
     explorationBoostForUnderused +
-    saturationPenalty;
+    saturationPenalty +
+    zeroMatchPenalty +
+    domainPenalty;
 
   // Force demote if validation score indicates unsafe content
   const forceDemote = validationScore <= -2;
@@ -567,9 +558,14 @@ function scoreEntry(entry, prompt, taskId, now, allEntries = []) {
     cluster_loss_count: clusterLossCount,
     similarity_matches: similarEntries.length,
     is_failure_memory: isFailureMemory,
-    force_demoted: forceDemote
+    force_demoted: forceDemote,
+    zero_match_penalty: zeroMatchPenalty,
+    domain_penalty: domainPenalty
   };
 }
+
+// How many candidate rows to fetch before scoring — large enough to include old but relevant entries
+const FETCH_LIMIT = 200;
 
 // Memory recall with pruning and consolidation
 function recallMemory(agent, prompt, taskId, opts = {}) {
@@ -586,7 +582,7 @@ function recallMemory(agent, prompt, taskId, opts = {}) {
     FROM memory_entries
     WHERE source = ? AND category = 'execution'
     ORDER BY created_at DESC
-    LIMIT 50
+    LIMIT ${FETCH_LIMIT}
   `).all(agent);
 
   const now = Math.floor(Date.now() / 1000);
@@ -594,7 +590,7 @@ function recallMemory(agent, prompt, taskId, opts = {}) {
   // Score all candidates deterministically
   const scored = candidates
     .map(e => ({ ...e, ...scoreEntry(e, prompt, taskId, now, candidates) }))
-    .filter(e => e.contentMatch > 0 || e.phraseMatch > 0)
+    .filter(e => e.contentMatch >= 0.25)
     .sort((a, b) => b.score - a.score);
 
   // Pruning: filter low-value entries

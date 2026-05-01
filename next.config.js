@@ -10,6 +10,8 @@ const nextConfig = {
   turbopack: {
     root: __dirname,
   },
+  // Exclude native addons from Turbopack bundling — resolved at runtime instead
+  serverExternalPackages: ['better-sqlite3'],
   // Transpile ESM-only packages so they resolve correctly in all environments
   transpilePackages: ['react-markdown', 'remark-gfm'],
   

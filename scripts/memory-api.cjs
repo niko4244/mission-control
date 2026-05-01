@@ -226,7 +226,7 @@ function audit(agent, options = {}) {
     FROM memory_entries
     WHERE source = ? AND category = 'execution'
     ORDER BY created_at DESC
-    LIMIT 50
+    LIMIT 200
   `).all(agent);
 
   const now = Math.floor(Date.now() / 1000);
@@ -237,9 +237,9 @@ function audit(agent, options = {}) {
     ...memoryService.scoreEntry(e, prompt, taskId, now, candidates)
   }));
 
-  // Filter and sort
+  // Filter and sort — require meaningful content match (>= 0.25) to suppress weak token hits
   const scoredFiltered = scored
-    .filter(e => e.contentMatch > 0 || e.phraseMatch > 0)
+    .filter(e => e.contentMatch >= 0.25)
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
 
@@ -419,6 +419,101 @@ function status() {
 }
 
 /**
+ * Review queue — flag risky or low-quality memories for manual inspection.
+ * Does not require a prompt; evaluates entries on stored signals alone.
+ */
+function review(options = {}) {
+  const { limit = 300, source = 'cli' } = options;
+
+  const candidates = db.prepare(`
+    SELECT id, content, agent, task_id, tags, confidence, created_at, source_ref
+    FROM memory_entries
+    WHERE source = ? AND category = 'execution'
+    ORDER BY created_at DESC
+    LIMIT ?
+  `).all(source, limit);
+
+  const flagged = [];
+
+  for (const entry of candidates) {
+    const ref = entry.source_ref || '';
+    const sig = memoryService.getSignalCounts(ref);
+    const validationScore = memoryService.getValidationScore(entry);
+    const promotionLevel = memoryService.getPromotionLevelWithCounts(sig.successCount, sig.failureCount);
+
+    // Proxy score: net success signal weight
+    const confidenceScore = sig.successCount - sig.failureCount;
+
+    const warnings = [];
+
+    // 1. HIGH_SCORE_LOW_VALID: accumulated signal but no validation evidence
+    if (confidenceScore >= 2 && validationScore <= 0) {
+      warnings.push('HIGH_SCORE_LOW_VALID');
+    }
+
+    // 2. FAILURE_HEAVY: failures dominate
+    if (sig.failureCount > sig.successCount && sig.failureCount >= 2) {
+      warnings.push('FAILURE_HEAVY');
+    }
+
+    // 3. LOW_USAGE_HIGH_CONFIDENCE: promoted but barely used
+    if (sig.appliedCount < 2 && promotionLevel !== 'observation') {
+      warnings.push('LOW_USAGE_HIGH_CONFIDENCE');
+    }
+
+    // 4. STALE_HIGH_CONFIDENCE: promoted but never applied in recall
+    if (['validated_pattern', 'core_rule'].includes(promotionLevel) && sig.appliedCount === 0) {
+      warnings.push('STALE_HIGH_CONFIDENCE');
+    }
+
+    // 5. CROSS_DOMAIN_SUSPECT: high confidence but thin/generic content
+    const uniqueTokens = memoryService.tokenize(entry.content);
+    if (confidenceScore >= 2 && uniqueTokens.size < 8) {
+      warnings.push('CROSS_DOMAIN_SUSPECT');
+    }
+
+    if (warnings.length === 0) continue;
+
+    const reasonParts = {
+      HIGH_SCORE_LOW_VALID: `signal score ${confidenceScore} with no validation evidence`,
+      FAILURE_HEAVY: `${sig.failureCount} failures vs ${sig.successCount} successes`,
+      LOW_USAGE_HIGH_CONFIDENCE: `promoted to ${promotionLevel} but only applied ${sig.appliedCount}x`,
+      STALE_HIGH_CONFIDENCE: `promoted to ${promotionLevel} but never applied in recall`,
+      CROSS_DOMAIN_SUSPECT: `high confidence (${confidenceScore}) but thin content (${uniqueTokens.size} tokens)`,
+    };
+
+    flagged.push({
+      id: entry.id,
+      content: entry.content,
+      score: confidenceScore,
+      promotion_level: promotionLevel,
+      validation_score: validationScore,
+      cluster_success_count: sig.successCount,
+      cluster_failure_count: sig.failureCount,
+      cluster_applied_count: sig.appliedCount,
+      cluster_win_count: sig.winCount,
+      cluster_loss_count: sig.lossCount,
+      warnings,
+      reason_summary: warnings.map(w => reasonParts[w]).join('; '),
+    });
+  }
+
+  flagged.sort((a, b) => b.warnings.length - a.warnings.length || b.score - a.score);
+
+  const summary = {
+    total_flagged: flagged.length,
+    high_risk: flagged.filter(e => e.warnings.length >= 2).length,
+    low_validation: flagged.filter(e => e.warnings.includes('HIGH_SCORE_LOW_VALID')).length,
+    failure_heavy: flagged.filter(e => e.warnings.includes('FAILURE_HEAVY')).length,
+    stale_high_confidence: flagged.filter(e =>
+      e.warnings.includes('STALE_HIGH_CONFIDENCE') || e.warnings.includes('LOW_USAGE_HIGH_CONFIDENCE')
+    ).length,
+  };
+
+  return { entries: flagged, summary };
+}
+
+/**
  * Health check
  */
 function health() {
@@ -453,6 +548,7 @@ function health() {
 module.exports = {
   recall,
   audit,
+  review,
   write,
   markOutcome,
   status,
