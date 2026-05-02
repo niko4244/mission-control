@@ -1,3 +1,6 @@
+# Agent loop logs
+logs/
+
 # Dependencies
 node_modules/
 
