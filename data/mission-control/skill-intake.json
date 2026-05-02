@@ -1,0 +1,72 @@
+{
+  "schema_version": "1",
+  "description": "Observe-only registry of external repos and skills under consideration for future study or integration.",
+  "entries": [
+    {
+      "name": "TradingAgents",
+      "repo_url": "https://github.com/TauricResearch/TradingAgents",
+      "category": "trading-agents",
+      "proposed_use": "Study multi-agent trading strategy patterns and debate-style agent architecture for use in Stephen the stocks bot and future Polymarket work",
+      "integration_status": "candidate",
+      "risk_level": 1,
+      "allowed_actions": ["read", "study", "reference", "cite-patterns"],
+      "forbidden_actions": ["clone", "install", "execute", "vendor", "modify-dependencies", "import-directly"],
+      "notes": "Multi-agent LLM framework for financial trading research by TauricResearch. High relevance to mission-control agent orchestration patterns."
+    },
+    {
+      "name": "jcode",
+      "repo_url": "https://github.com/1jehuang/jcode",
+      "category": "coding-tools",
+      "proposed_use": "Study lightweight coding agent or task-routing patterns that may complement mission-control CLI agent design",
+      "integration_status": "candidate",
+      "risk_level": 0,
+      "allowed_actions": ["read", "study", "reference"],
+      "forbidden_actions": ["clone", "install", "execute", "vendor", "modify-dependencies", "import-directly"],
+      "notes": "Small coding tool repo. Low risk. Observe and assess for CLI agent patterns."
+    },
+    {
+      "name": "mattpocock-skills",
+      "repo_url": "https://github.com/mattpocock/skills",
+      "category": "skills-framework",
+      "proposed_use": "Study skill registration and dispatch patterns for use in mission-control skills subsystem",
+      "integration_status": "candidate",
+      "risk_level": 0,
+      "allowed_actions": ["read", "study", "reference", "adapt-patterns"],
+      "forbidden_actions": ["clone", "install", "execute", "vendor", "modify-dependencies", "import-directly"],
+      "notes": "Matt Pocock's skills repo. Useful reference for structured skill dispatch and type-safe skill registration."
+    },
+    {
+      "name": "browserbase-skills",
+      "repo_url": "https://github.com/browserbase/skills",
+      "category": "browser-automation",
+      "proposed_use": "Study browser automation skill patterns for potential future agent browser-use integration in mission-control",
+      "integration_status": "candidate",
+      "risk_level": 1,
+      "allowed_actions": ["read", "study", "reference"],
+      "forbidden_actions": ["clone", "install", "execute", "vendor", "modify-dependencies", "import-directly"],
+      "notes": "Browserbase skills repo. Relevant if mission-control agents need browser-use capabilities in future phases."
+    },
+    {
+      "name": "sim",
+      "repo_url": "https://github.com/simstudioai/sim",
+      "category": "agent-simulation",
+      "proposed_use": "Study simulation studio architecture for multi-agent workflow design patterns applicable to mission-control orchestration layer",
+      "integration_status": "candidate",
+      "risk_level": 1,
+      "allowed_actions": ["read", "study", "reference", "cite-patterns"],
+      "forbidden_actions": ["clone", "install", "execute", "vendor", "modify-dependencies", "import-directly"],
+      "notes": "SimStudio AI visual agent workflow tool. Observe for orchestration and simulation patterns."
+    },
+    {
+      "name": "superpowers",
+      "repo_url": "https://github.com/obra/superpowers",
+      "category": "agent-augmentation",
+      "proposed_use": "Study developer superpower augmentation patterns for possible integration into mission-control agent capability layer",
+      "integration_status": "candidate",
+      "risk_level": 0,
+      "allowed_actions": ["read", "study", "reference"],
+      "forbidden_actions": ["clone", "install", "execute", "vendor", "modify-dependencies", "import-directly"],
+      "notes": "obra/superpowers developer augmentation toolkit. Low risk. Review for agent capability extension ideas."
+    }
+  ]
+}
