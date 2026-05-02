@@ -10,6 +10,7 @@
     "repo:steward": "node scripts/repo-steward.cjs",
     "agents:repo-steward": "node scripts/agent-loop.cjs repo-steward",
     "skills:intake": "node scripts/skill-intake.cjs",
+    "mc:run": "node scripts/mc-coordinator.cjs",
     "mc:mcp": "node scripts/mc-mcp-server.cjs",
     "mc:tui": "node scripts/mc-tui.cjs",
     "dev": "pnpm run verify:node && next dev --hostname 127.0.0.1 --port 3000",
