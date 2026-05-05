@@ -124,11 +124,16 @@ describe('mc-coordinator', () => {
     )
   })
 
-  it('summary has total_agents, ok, warn, fail', () => {
+  it('summary has total_agents, pass, warn, fail', () => {
     const { summary } = JSON.parse(runCoordinator({ MC_LOG_DIR: tmpDir }).stdout)
-    for (const f of ['total_agents', 'ok', 'warn', 'fail']) {
+    for (const f of ['total_agents', 'pass', 'warn', 'fail']) {
       expect(typeof summary[f]).toBe('number')
     }
+  })
+
+  it('does not emit legacy summary.ok', () => {
+    const { summary } = JSON.parse(runCoordinator({ MC_LOG_DIR: tmpDir }).stdout)
+    expect(summary).not.toHaveProperty('ok')
   })
 
   it('agents key contains repo-steward and skill-intake', () => {

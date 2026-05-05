@@ -196,7 +196,7 @@ function buildSummary(agentMap, coordinatorWarnings) {
 
   return {
     total_agents: results.length,
-    ok:   statuses.filter(s => s === 'OK').length,
+    pass: statuses.filter(s => s === 'OK').length,
     warn: statuses.filter(s => s === 'WARN').length,
     fail: statuses.filter(s => s === 'FAIL').length,
     warnings: allWarnings,
