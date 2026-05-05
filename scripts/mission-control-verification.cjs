@@ -6,48 +6,28 @@
 
 'use strict';
 
-const KNOWN_RUN_STATUSES = new Set(['OK', 'PASS', 'WARN', 'FAIL']);
-const KNOWN_VALIDATION_STATUSES = new Set(['PASS', 'FAIL', 'NOT_RUN']);
-
-function getValueAtPath(target, fieldPath) {
-  return String(fieldPath || '')
-    .split('.')
-    .filter(Boolean)
-    .reduce((value, key) => (value == null ? undefined : value[key]), target);
-}
+const {
+  VALID_VALIDATION_STATUSES,
+  REQUIRED_RESULT_FIELDS,
+  validateMissionControlResult,
+} = require('./mission-control-result-schema.cjs');
 
 function normalizeRunStatus(status) {
   if (typeof status !== 'string') return 'UNKNOWN';
   const upper = status.toUpperCase();
-  if (upper === 'PASS') return 'OK';
+  if (upper === 'PASS' || upper === 'OK') return 'OK';
   if (upper === 'OK' || upper === 'WARN' || upper === 'FAIL') return upper;
   return upper;
-}
-
-function normalizeValidationStatus(step) {
-  if (!step || typeof step !== 'object') return 'UNKNOWN';
-
-  if (typeof step.status === 'string') {
-    return step.status.toUpperCase();
-  }
-
-  if (step.skipped === true) return 'NOT_RUN';
-  if (step.passed === true) return 'PASS';
-  if (step.passed === false) return 'FAIL';
-
-  return 'UNKNOWN';
 }
 
 function collectValidationChecks(output) {
   const steps = Array.isArray(output && output.validation && output.validation.steps)
     ? output.validation.steps
-    : Array.isArray(output && output.validation && output.validation.commands)
-      ? output.validation.commands
-      : [];
+    : [];
 
   return steps.map((step, index) => ({
     name: step.step || step.name || step.command || `validation-${index + 1}`,
-    status: normalizeValidationStatus(step),
+    status: typeof step.status === 'string' ? step.status.toUpperCase() : 'UNKNOWN',
   }));
 }
 
@@ -57,14 +37,47 @@ function pushUnique(values, nextValue) {
   }
 }
 
+function buildCanonicalCandidate(output) {
+  const source = output && typeof output === 'object' ? output : {};
+
+  return {
+    ...source,
+    summary: source.summary === undefined ? {} : source.summary,
+    checks: source.checks === undefined ? [] : source.checks,
+    failures: source.failures === undefined ? [] : source.failures,
+    warnings: source.warnings === undefined ? [] : source.warnings,
+    next_actions: source.next_actions !== undefined
+      ? source.next_actions
+      : Array.isArray(source.recommended_next_actions)
+        ? source.recommended_next_actions
+        : [],
+    validation: source.validation === undefined ? {} : source.validation,
+    metadata: source.metadata === undefined ? {} : source.metadata,
+  };
+}
+
 function verifyCompletedRun(output, options = {}) {
   const checks = [];
-  const failures = [];
+  const canonicalCandidate = buildCanonicalCandidate(output);
+  const schemaValidation = validateMissionControlResult(output, {
+    requiredFields: Array.isArray(options.requiredFields) && options.requiredFields.length > 0
+      ? options.requiredFields
+      : REQUIRED_RESULT_FIELDS,
+    warnOnUnknownFields: options.warnOnUnknownFields,
+  });
+  const canonicalSchemaValidation = validateMissionControlResult(canonicalCandidate, {
+    requiredFields: Array.isArray(options.requiredFields) && options.requiredFields.length > 0
+      ? options.requiredFields
+      : REQUIRED_RESULT_FIELDS,
+    warnOnUnknownFields: false,
+  });
+  const normalized = canonicalSchemaValidation.normalized || canonicalCandidate;
+  const failures = [...canonicalSchemaValidation.failures];
   const warnings = [];
+  for (const warning of [...schemaValidation.warnings, ...canonicalSchemaValidation.warnings]) {
+    pushUnique(warnings, warning);
+  }
   const next_actions = [];
-  const requiredFields = Array.isArray(options.requiredFields)
-    ? options.requiredFields
-    : ['status', 'risk_level'];
   const requiredValidationCommands = Array.isArray(options.requiredValidationCommands)
     ? options.requiredValidationCommands
     : [];
@@ -73,36 +86,16 @@ function verifyCompletedRun(output, options = {}) {
     checks.push({ name, status, message });
   };
 
-  for (const field of requiredFields) {
-    if (getValueAtPath(output, field) === undefined) {
-      const message = `Missing required field: ${field}`;
-      failures.push(message);
-      pushUnique(next_actions, `Populate required output field: ${field}`);
-      addCheck(`schema:${field}`, 'FAIL', message);
-    } else {
-      addCheck(`schema:${field}`, 'PASS', `${field} present`);
-    }
-  }
-
-  const rawStatus = typeof (output && output.status) === 'string'
-    ? output.status.toUpperCase()
-    : null;
-
-  if (!rawStatus) {
-    const message = 'Missing status value';
-    failures.push(message);
-    pushUnique(next_actions, 'Return a recognized status value: OK, PASS, WARN, or FAIL');
-    addCheck('status:value', 'FAIL', message);
-  } else if (!KNOWN_RUN_STATUSES.has(rawStatus)) {
-    const message = `Unknown status value: ${rawStatus}`;
-    failures.push(message);
-    pushUnique(next_actions, 'Return a recognized status value: OK, PASS, WARN, or FAIL');
-    addCheck('status:value', 'FAIL', message);
+  if (!canonicalSchemaValidation.valid) {
+    pushUnique(next_actions, 'Return a canonical Mission Control result shape before reporting completion');
+    addCheck('schema:result', 'FAIL', canonicalSchemaValidation.failures.join('; '));
+  } else if (warnings.length > 0) {
+    addCheck('schema:result', 'WARN', warnings.join('; '));
   } else {
-    addCheck('status:value', 'PASS', `Recognized status: ${rawStatus}`);
+    addCheck('schema:result', 'PASS', 'Mission Control result schema valid');
   }
 
-  const validationChecks = collectValidationChecks(output);
+  const validationChecks = collectValidationChecks(normalized);
   const validationByName = new Map(validationChecks.map((check) => [check.name, check.status]));
 
   for (const requiredCommand of requiredValidationCommands) {
@@ -132,7 +125,7 @@ function verifyCompletedRun(output, options = {}) {
       continue;
     }
 
-    if (!KNOWN_VALIDATION_STATUSES.has(commandStatus)) {
+    if (!VALID_VALIDATION_STATUSES.includes(commandStatus)) {
       const message = `Unknown validation status for ${requiredCommand}: ${commandStatus}`;
       failures.push(message);
       pushUnique(next_actions, `Normalize validation status for ${requiredCommand}`);
@@ -164,7 +157,7 @@ function verifyCompletedRun(output, options = {}) {
       continue;
     }
 
-    if (!KNOWN_VALIDATION_STATUSES.has(validationCheck.status)) {
+    if (!VALID_VALIDATION_STATUSES.includes(validationCheck.status)) {
       const message = `Unknown validation status for ${validationCheck.name}: ${validationCheck.status}`;
       failures.push(message);
       pushUnique(next_actions, `Normalize validation status for ${validationCheck.name}`);
@@ -173,14 +166,14 @@ function verifyCompletedRun(output, options = {}) {
     }
   }
 
-  if (output && output.git) {
-    if (output.git.is_clean === false && options.allowDirtyGit !== true) {
+  if (normalized && normalized.git) {
+    if (normalized.git.is_clean === false && options.allowDirtyGit !== true) {
       const message = 'Working tree is dirty';
       warnings.push(message);
       pushUnique(next_actions, 'Review or explicitly allow the dirty working tree before reporting completion');
       addCheck('git:is_clean', 'WARN', message);
-    } else if (typeof output.git.is_clean === 'boolean') {
-      addCheck('git:is_clean', 'PASS', output.git.is_clean ? 'Working tree is clean' : 'Dirty working tree explicitly allowed');
+    } else if (typeof normalized.git.is_clean === 'boolean') {
+      addCheck('git:is_clean', 'PASS', normalized.git.is_clean ? 'Working tree is clean' : 'Dirty working tree explicitly allowed');
     }
   }
 
@@ -194,6 +187,7 @@ function verifyCompletedRun(output, options = {}) {
     failures,
     warnings,
     next_actions,
+    normalized,
   };
 }
 

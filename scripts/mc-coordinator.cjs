@@ -96,21 +96,26 @@ function getAgentRiskLevel(agentResult) {
 
 function applyVerification(agentResult) {
   const verification = verifyCompletedRun(agentResult, {
-    requiredFields: ['status', 'risk_level'],
+    requiredFields: ['status', 'risk_level', 'summary', 'checks', 'failures', 'warnings', 'next_actions', 'validation', 'metadata'],
   });
-  const normalizedStatus = normalizeRunStatus(agentResult.status || 'UNKNOWN');
-  const warnings = Array.isArray(agentResult.warnings) ? [...agentResult.warnings] : [];
-  const recommendedNextActions = Array.isArray(agentResult.recommended_next_actions)
-    ? [...agentResult.recommended_next_actions]
-    : [];
+  const normalizedAgentResult = verification.normalized && typeof verification.normalized === 'object'
+    ? verification.normalized
+    : agentResult;
+  const normalizedStatus = normalizeRunStatus(normalizedAgentResult.status || 'UNKNOWN');
+  const warnings = Array.isArray(normalizedAgentResult.warnings) ? [...normalizedAgentResult.warnings] : [];
+  const nextActions = Array.isArray(normalizedAgentResult.next_actions)
+    ? [...normalizedAgentResult.next_actions]
+    : Array.isArray(normalizedAgentResult.recommended_next_actions)
+      ? [...normalizedAgentResult.recommended_next_actions]
+      : [];
   const verificationSummary = [
     ...verification.failures,
     ...verification.warnings,
   ].join('; ');
 
   for (const action of verification.next_actions) {
-    if (!recommendedNextActions.includes(action)) {
-      recommendedNextActions.push(action);
+    if (!nextActions.includes(action)) {
+      nextActions.push(action);
     }
   }
 
@@ -120,32 +125,34 @@ function applyVerification(agentResult) {
 
   if (verification.status === 'FAIL') {
     return {
-      ...agentResult,
+      ...normalizedAgentResult,
       status: 'FAIL',
-      risk_level: Math.max(getAgentRiskLevel(agentResult), verification.risk_level),
+      risk_level: Math.max(getAgentRiskLevel(normalizedAgentResult), verification.risk_level),
       warnings,
-      recommended_next_actions: recommendedNextActions,
+      next_actions: nextActions,
+      recommended_next_actions: nextActions,
       verification,
     };
   }
 
   if (verification.status === 'WARN' && normalizedStatus !== 'FAIL') {
     return {
-      ...agentResult,
+      ...normalizedAgentResult,
       status: 'WARN',
-      risk_level: Math.max(getAgentRiskLevel(agentResult), verification.risk_level),
+      risk_level: Math.max(getAgentRiskLevel(normalizedAgentResult), verification.risk_level),
       warnings,
-      recommended_next_actions: recommendedNextActions,
+      next_actions: nextActions,
+      recommended_next_actions: nextActions,
       verification,
     };
   }
 
   return {
-    ...agentResult,
-    status: normalizedStatus,
-    risk_level: getAgentRiskLevel(agentResult),
+    ...normalizedAgentResult,
+    risk_level: getAgentRiskLevel(normalizedAgentResult),
     warnings,
-    recommended_next_actions: recommendedNextActions,
+    next_actions: nextActions,
+    recommended_next_actions: nextActions,
     verification,
   };
 }

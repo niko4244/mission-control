@@ -7,18 +7,23 @@ const {
 describe('mission-control verification', () => {
   it('passes a valid completed run', () => {
     const result = verifyCompletedRun({
-      status: 'OK',
+      status: 'PASS',
       risk_level: 0,
+      summary: {},
+      checks: [],
+      failures: [],
+      warnings: [],
+      next_actions: [],
+      metadata: {},
       git: { is_clean: true },
       validation: {
         steps: [
-          { step: 'typecheck', passed: true },
-          { step: 'test', passed: true },
-          { step: 'build', passed: true },
+          { step: 'typecheck', status: 'PASS' },
+          { step: 'test', status: 'PASS' },
+          { step: 'build', status: 'PASS' },
         ],
       },
     }, {
-      requiredFields: ['status', 'risk_level'],
       requiredValidationCommands: ['typecheck', 'test', 'build'],
     })
 
@@ -27,19 +32,63 @@ describe('mission-control verification', () => {
     expect(result.warnings).toEqual([])
   })
 
-  it('fails when a required validation command fails', () => {
+  it('uses the normalized canonical result inside the verifier', () => {
     const result = verifyCompletedRun({
       status: 'OK',
       risk_level: 0,
+      summary: {},
+      checks: [],
+      failures: [],
+      warnings: [],
+      next_actions: [],
+      metadata: {},
       validation: {
         steps: [
-          { step: 'typecheck', passed: true },
-          { step: 'test', passed: false },
-          { step: 'build', passed: true },
+          { step: 'typecheck', status: 'PASS' },
+        ],
+      },
+    })
+
+    expect(result.normalized.status).toBe('PASS')
+  })
+
+  it('warns when legacy OK is normalized inside the verifier', () => {
+    const result = verifyCompletedRun({
+      status: 'OK',
+      risk_level: 0,
+      summary: {},
+      checks: [],
+      failures: [],
+      warnings: [],
+      next_actions: [],
+      metadata: {},
+      validation: {
+        steps: [],
+      },
+    })
+
+    expect(result.status).toBe('WARN')
+    expect(result.warnings).toContain('Legacy status OK normalized to PASS')
+  })
+
+  it('fails when a required validation command fails', () => {
+    const result = verifyCompletedRun({
+      status: 'PASS',
+      risk_level: 0,
+      summary: {},
+      checks: [],
+      failures: [],
+      warnings: [],
+      next_actions: [],
+      metadata: {},
+      validation: {
+        steps: [
+          { step: 'typecheck', status: 'PASS' },
+          { step: 'test', status: 'FAIL' },
+          { step: 'build', status: 'PASS' },
         ],
       },
     }, {
-      requiredFields: ['status', 'risk_level'],
       requiredValidationCommands: ['typecheck', 'test', 'build'],
     })
 
@@ -49,9 +98,7 @@ describe('mission-control verification', () => {
 
   it('fails when a required schema field is missing', () => {
     const result = verifyCompletedRun({
-      status: 'OK',
-    }, {
-      requiredFields: ['status', 'risk_level'],
+      status: 'PASS',
     })
 
     expect(result.status).toBe('FAIL')
@@ -62,8 +109,13 @@ describe('mission-control verification', () => {
     const result = verifyCompletedRun({
       status: 'DONE',
       risk_level: 0,
-    }, {
-      requiredFields: ['status', 'risk_level'],
+      summary: {},
+      checks: [],
+      failures: [],
+      warnings: [],
+      next_actions: [],
+      metadata: {},
+      validation: {},
     })
 
     expect(result.status).toBe('FAIL')
@@ -72,11 +124,16 @@ describe('mission-control verification', () => {
 
   it('warns when git state is dirty unexpectedly', () => {
     const result = verifyCompletedRun({
-      status: 'OK',
+      status: 'PASS',
       risk_level: 0,
+      summary: {},
+      checks: [],
+      failures: [],
+      warnings: [],
+      next_actions: [],
+      metadata: {},
+      validation: {},
       git: { is_clean: false },
-    }, {
-      requiredFields: ['status', 'risk_level'],
     })
 
     expect(result.status).toBe('WARN')
@@ -85,21 +142,43 @@ describe('mission-control verification', () => {
 
   it('warns when a required validation command is explicitly not run', () => {
     const result = verifyCompletedRun({
-      status: 'OK',
+      status: 'PASS',
       risk_level: 0,
+      summary: {},
+      checks: [],
+      failures: [],
+      warnings: [],
+      next_actions: [],
+      metadata: {},
       validation: {
         steps: [
-          { step: 'typecheck', passed: true },
-          { step: 'test', passed: true },
-          { step: 'build', passed: true, skipped: true },
+          { step: 'typecheck', status: 'PASS' },
+          { step: 'test', status: 'PASS' },
+          { step: 'build', status: 'NOT_RUN' },
         ],
       },
     }, {
-      requiredFields: ['status', 'risk_level'],
       requiredValidationCommands: ['typecheck', 'test', 'build'],
     })
 
     expect(result.status).toBe('WARN')
     expect(result.warnings).toContain('Validation command not run: build')
+  })
+
+  it('fails when schema validation fails', () => {
+    const result = verifyCompletedRun({
+      status: 'PASS',
+      risk_level: 0,
+      summary: {},
+      checks: {},
+      failures: [],
+      warnings: [],
+      next_actions: [],
+      metadata: {},
+      validation: {},
+    })
+
+    expect(result.status).toBe('FAIL')
+    expect(result.failures).toContain('checks must be an array')
   })
 })
