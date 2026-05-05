@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -19,6 +19,9 @@ function runScript(): { stdout: string; status: number | null } {
     status: result.status,
   }
 }
+
+let cliRun: { stdout: string; status: number | null }
+let cliJson: Record<string, any>
 
 describe('local-capabilities helpers', () => {
   it('extracts the first non-empty line from command output', () => {
@@ -88,41 +91,41 @@ describe('local-capabilities helpers', () => {
 })
 
 describe('local-capabilities CLI', () => {
+  beforeAll(() => {
+    cliRun = runScript()
+    cliJson = JSON.parse(cliRun.stdout)
+  })
+
   it('exits successfully', () => {
-    expect(runScript().status).toBe(0)
+    expect(cliRun.status).toBe(0)
   })
 
   it('emits valid JSON', () => {
-    expect(() => JSON.parse(runScript().stdout)).not.toThrow()
+    expect(() => JSON.parse(cliRun.stdout)).not.toThrow()
   })
 
   it('labels output as OBSERVE ONLY', () => {
-    const parsed = JSON.parse(runScript().stdout)
-    expect(parsed.label).toBe('OBSERVE ONLY')
+    expect(cliJson.label).toBe('OBSERVE ONLY')
   })
 
   it('includes required top-level fields', () => {
-    const parsed = JSON.parse(runScript().stdout)
     for (const field of ['agent', 'label', 'status', 'checked_at', 'critical_missing', 'important_missing', 'optional_missing', 'capabilities', 'warnings', 'recommended_actions']) {
-      expect(parsed).toHaveProperty(field)
+      expect(cliJson).toHaveProperty(field)
     }
   })
 
   it('reports the expected tool keys', () => {
-    const parsed = JSON.parse(runScript().stdout)
     for (const field of ['node', 'pnpm', 'git', 'github_cli', 'powershell', 'aider', 'ollama']) {
-      expect(parsed.capabilities).toHaveProperty(field)
+      expect(cliJson.capabilities).toHaveProperty(field)
     }
   })
 
   it('keeps Ollama models as an array', () => {
-    const parsed = JSON.parse(runScript().stdout)
-    expect(Array.isArray(parsed.capabilities.ollama.models)).toBe(true)
+    expect(Array.isArray(cliJson.capabilities.ollama.models)).toBe(true)
   })
 
   it('uses PASS, WARN, or FAIL status values', () => {
-    const parsed = JSON.parse(runScript().stdout)
-    expect(['PASS', 'WARN', 'FAIL']).toContain(parsed.status)
+    expect(['PASS', 'WARN', 'FAIL']).toContain(cliJson.status)
   })
 
   it('does not contain unsafe install or model-pull commands in source', () => {
