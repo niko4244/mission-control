@@ -158,6 +158,17 @@ describe('mc-coordinator', () => {
     expect(report.status).not.toBe('FAIL')
   })
 
+  it('repo-steward no longer triggers legacy OK normalization warnings', () => {
+    const report = JSON.parse(runCoordinator({ MC_LOG_DIR: tmpDir }).stdout)
+    const repoSteward = report.agents['repo-steward']
+    const summaryWarnings = report.summary?.warnings || []
+
+    expect(repoSteward).toBeDefined()
+    expect(repoSteward.status).not.toBe('FAIL')
+    expect((repoSteward.warnings || []).join(' ')).not.toContain('Legacy status OK normalized to PASS')
+    expect(JSON.stringify(summaryWarnings)).not.toContain('Legacy status OK normalized to PASS')
+  })
+
   // ── Log persistence ───────────────────────────────────────────────────────
 
   it('writes latest.json', () => {
