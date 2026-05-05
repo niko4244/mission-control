@@ -18,6 +18,9 @@ const {
   normalizeRunStatus,
   verifyCompletedRun,
 } = require('./mission-control-verification.cjs');
+const {
+  runMissionControlPreflight,
+} = require('./mission-control-preflight.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const REGISTRY_PATH = process.env.MC_REGISTRY_PATH
@@ -222,6 +225,7 @@ function persistLogs(report) {
 const registry = loadRegistry();
 const { selected, rejected } = selectAgents(registry);
 const coordinatorWarnings = [];
+const executeRequested = process.argv.includes('--execute');
 
 if (registry.error)      coordinatorWarnings.push(registry.error);
 if (rejected.length > 0) coordinatorWarnings.push(
@@ -232,8 +236,19 @@ if (selected.length === 0) coordinatorWarnings.push(
 );
 
 const agentResults = {};
-for (const agent of selected) {
-  agentResults[agent.id] = runAgent(agent);
+const preflightResult = applyVerification(runMissionControlPreflight({
+  root: ROOT,
+  env: process.env,
+  executeRequested,
+}));
+agentResults['mission-control-preflight'] = preflightResult;
+
+if (preflightResult.status === 'FAIL') {
+  coordinatorWarnings.push('Mission Control pre-flight failed; child agent execution was skipped.');
+} else {
+  for (const agent of selected) {
+    agentResults[agent.id] = runAgent(agent);
+  }
 }
 
 const resultValues = Object.values(agentResults);
@@ -252,7 +267,7 @@ const report = {
 persistLogs(report);
 console.log(JSON.stringify(report, null, 2));
 
-if (process.argv.includes('--execute')) {
+if (executeRequested && preflightResult.status !== 'FAIL') {
   const executeResult = spawnSync('node', [path.join(__dirname, 'mc-execute.cjs')], {
     encoding: 'utf-8',
     cwd: ROOT,

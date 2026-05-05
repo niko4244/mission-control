@@ -229,6 +229,26 @@ describe('mc-coordinator', () => {
     expect(report.status).toBe('WARN')
   })
 
+  it('surfaces pre-flight FAIL before running child agents', () => {
+    const reg = makeTempRegistry([{
+      id: 'should-not-run',
+      command: ['node', '-e', 'console.log(JSON.stringify({status:"PASS",risk_level:0,summary:{},checks:[],failures:[],warnings:[],next_actions:[],validation:{},metadata:{}}))'],
+      enabled: true,
+      observe_only: true,
+      timeout_ms: 5000,
+    }], tmpDir)
+
+    const report = JSON.parse(runCoordinator({
+      MC_REGISTRY_PATH: reg,
+      MC_LOG_DIR: tmpDir,
+      MC_ALLOW_EXECUTE: '1',
+    }).stdout)
+
+    expect(report.status).toBe('FAIL')
+    expect(report.agents['mission-control-preflight'].status).toBe('FAIL')
+    expect(report.agents['should-not-run']).toBeUndefined()
+  })
+
   // ── Safety ────────────────────────────────────────────────────────────────
 
   it('does not contain forbidden commands in source', () => {
