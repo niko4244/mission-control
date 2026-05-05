@@ -112,8 +112,8 @@ describe('mc-coordinator', () => {
     }
   })
 
-  it('status is OK, WARN, or FAIL', () => {
-    expect(['OK', 'WARN', 'FAIL']).toContain(
+  it('status is PASS, WARN, or FAIL', () => {
+    expect(['PASS', 'WARN', 'FAIL']).toContain(
       JSON.parse(runCoordinator({ MC_LOG_DIR: tmpDir }).stdout).status
     )
   })
@@ -166,6 +166,16 @@ describe('mc-coordinator', () => {
     expect(repoSteward).toBeDefined()
     expect(repoSteward.status).not.toBe('FAIL')
     expect((repoSteward.warnings || []).join(' ')).not.toContain('Legacy status OK normalized to PASS')
+    expect(JSON.stringify(summaryWarnings)).not.toContain('Legacy status OK normalized to PASS')
+  })
+
+  it('systems-curator no longer triggers legacy OK normalization warnings', () => {
+    const report = JSON.parse(runCoordinator({ MC_LOG_DIR: tmpDir }).stdout)
+    const systemsCurator = report.agents['systems-curator']
+    const summaryWarnings = report.summary?.warnings || []
+
+    expect(systemsCurator).toBeDefined()
+    expect((systemsCurator.warnings || []).join(' ')).not.toContain('Legacy status OK normalized to PASS')
     expect(JSON.stringify(summaryWarnings)).not.toContain('Legacy status OK normalized to PASS')
   })
 

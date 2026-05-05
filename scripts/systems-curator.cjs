@@ -319,7 +319,7 @@ function computeStatusAndRisk(warnings, unsafeMutablePaths, mismatches, brokenTa
   if (mismatches.length > 0 || brokenTargets.length > 0) riskLevel = Math.max(riskLevel, 2);
   if (unsafeMutablePaths.length > 0) riskLevel = Math.max(riskLevel, 2);
 
-  const status = riskLevel >= 2 ? 'FAIL' : riskLevel === 1 ? 'WARN' : 'OK';
+  const status = riskLevel >= 2 ? 'FAIL' : riskLevel === 1 ? 'WARN' : 'PASS';
   return { status, risk_level: riskLevel };
 }
 

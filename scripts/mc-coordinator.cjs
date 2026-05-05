@@ -174,7 +174,7 @@ function computeStatus(results) {
   const statuses = results.map(r => normalizeRunStatus(r.status || 'UNKNOWN'));
   if (statuses.some(s => s === 'FAIL')) return 'FAIL';
   if (statuses.some(s => s === 'WARN')) return 'WARN';
-  if (statuses.every(s => s === 'OK'))  return 'OK';
+  if (statuses.every(s => s === 'OK'))  return 'PASS';
   return 'WARN';
 }
 
