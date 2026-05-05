@@ -6,22 +6,53 @@ import capabilities from '../../../scripts/local-capabilities.cjs'
 
 const SCRIPT_PATH = path.resolve(__dirname, '../../../scripts/local-capabilities.cjs')
 const PROJECT_ROOT = path.resolve(__dirname, '../../..')
+const CLI_TIMEOUT_MS = 30000
 
-function runScript(): { stdout: string; status: number | null } {
+function runScript(): {
+  stdout: string
+  stderr: string
+  status: number | null
+  signal: NodeJS.Signals | null
+  error?: string
+} {
   const result = spawnSync('node', [SCRIPT_PATH], {
     encoding: 'utf-8',
     cwd: PROJECT_ROOT,
-    timeout: 15000,
+    timeout: CLI_TIMEOUT_MS,
   })
 
   return {
     stdout: result.stdout || '',
+    stderr: result.stderr || '',
     status: result.status,
+    signal: result.signal,
+    error: result.error?.message,
   }
 }
 
-let cliRun: { stdout: string; status: number | null }
-let cliJson: Record<string, any>
+function parseCliJson(run: {
+  stdout: string
+  stderr: string
+  status: number | null
+  signal: NodeJS.Signals | null
+  error?: string
+}): Record<string, any> {
+  expect(run.error).toBeUndefined()
+  expect(run.signal).toBeNull()
+  expect(run.status).toBe(0)
+  expect(run.stderr.trim()).toBe('')
+  expect(run.stdout.trim()).not.toBe('')
+
+  return JSON.parse(run.stdout)
+}
+
+let cliRun: {
+  stdout: string
+  stderr: string
+  status: number | null
+  signal: NodeJS.Signals | null
+  error?: string
+}
 
 describe('local-capabilities helpers', () => {
   it('extracts the first non-empty line from command output', () => {
@@ -93,38 +124,44 @@ describe('local-capabilities helpers', () => {
 describe('local-capabilities CLI', () => {
   beforeAll(() => {
     cliRun = runScript()
-    cliJson = JSON.parse(cliRun.stdout)
   })
 
   it('exits successfully', () => {
+    expect(cliRun.error).toBeUndefined()
+    expect(cliRun.signal).toBeNull()
     expect(cliRun.status).toBe(0)
   })
 
   it('emits valid JSON', () => {
-    expect(() => JSON.parse(cliRun.stdout)).not.toThrow()
+    expect(() => parseCliJson(cliRun)).not.toThrow()
   })
 
   it('labels output as OBSERVE ONLY', () => {
+    const cliJson = parseCliJson(cliRun)
     expect(cliJson.label).toBe('OBSERVE ONLY')
   })
 
   it('includes required top-level fields', () => {
+    const cliJson = parseCliJson(cliRun)
     for (const field of ['agent', 'label', 'status', 'checked_at', 'critical_missing', 'important_missing', 'optional_missing', 'capabilities', 'warnings', 'recommended_actions']) {
       expect(cliJson).toHaveProperty(field)
     }
   })
 
   it('reports the expected tool keys', () => {
+    const cliJson = parseCliJson(cliRun)
     for (const field of ['node', 'pnpm', 'git', 'github_cli', 'powershell', 'aider', 'ollama']) {
       expect(cliJson.capabilities).toHaveProperty(field)
     }
   })
 
   it('keeps Ollama models as an array', () => {
+    const cliJson = parseCliJson(cliRun)
     expect(Array.isArray(cliJson.capabilities.ollama.models)).toBe(true)
   })
 
   it('uses PASS, WARN, or FAIL status values', () => {
+    const cliJson = parseCliJson(cliRun)
     expect(['PASS', 'WARN', 'FAIL']).toContain(cliJson.status)
   })
 
