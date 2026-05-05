@@ -14,6 +14,10 @@
 const { spawnSync } = require('child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const {
+  normalizeRunStatus,
+  verifyCompletedRun,
+} = require('./mission-control-verification.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const REGISTRY_PATH = process.env.MC_REGISTRY_PATH
@@ -72,7 +76,7 @@ function runAgent(agent) {
   }
 
   try {
-    return JSON.parse(result.stdout);
+    return applyVerification(JSON.parse(result.stdout));
   } catch (e) {
     return {
       status: 'FAIL',
@@ -83,10 +87,73 @@ function runAgent(agent) {
   }
 }
 
+function getAgentRiskLevel(agentResult) {
+  if (typeof agentResult.risk_level === 'number' && Number.isFinite(agentResult.risk_level)) {
+    return agentResult.risk_level;
+  }
+  return inferRisk(agentResult.status || 'UNKNOWN');
+}
+
+function applyVerification(agentResult) {
+  const verification = verifyCompletedRun(agentResult, {
+    requiredFields: ['status', 'risk_level'],
+  });
+  const normalizedStatus = normalizeRunStatus(agentResult.status || 'UNKNOWN');
+  const warnings = Array.isArray(agentResult.warnings) ? [...agentResult.warnings] : [];
+  const recommendedNextActions = Array.isArray(agentResult.recommended_next_actions)
+    ? [...agentResult.recommended_next_actions]
+    : [];
+  const verificationSummary = [
+    ...verification.failures,
+    ...verification.warnings,
+  ].join('; ');
+
+  for (const action of verification.next_actions) {
+    if (!recommendedNextActions.includes(action)) {
+      recommendedNextActions.push(action);
+    }
+  }
+
+  if (verificationSummary && !warnings.includes(verificationSummary)) {
+    warnings.push(verificationSummary);
+  }
+
+  if (verification.status === 'FAIL') {
+    return {
+      ...agentResult,
+      status: 'FAIL',
+      risk_level: Math.max(getAgentRiskLevel(agentResult), verification.risk_level),
+      warnings,
+      recommended_next_actions: recommendedNextActions,
+      verification,
+    };
+  }
+
+  if (verification.status === 'WARN' && normalizedStatus !== 'FAIL') {
+    return {
+      ...agentResult,
+      status: 'WARN',
+      risk_level: Math.max(getAgentRiskLevel(agentResult), verification.risk_level),
+      warnings,
+      recommended_next_actions: recommendedNextActions,
+      verification,
+    };
+  }
+
+  return {
+    ...agentResult,
+    status: normalizedStatus,
+    risk_level: getAgentRiskLevel(agentResult),
+    warnings,
+    recommended_next_actions: recommendedNextActions,
+    verification,
+  };
+}
+
 // ── Scoring ───────────────────────────────────────────────────────────────────
 
 function inferRisk(status) {
-  if (status === 'OK')   return 0;
+  if (status === 'OK' || status === 'PASS') return 0;
   if (status === 'WARN') return 1;
   if (status === 'FAIL') return 3;
   return 1;
@@ -94,7 +161,7 @@ function inferRisk(status) {
 
 function computeStatus(results) {
   if (!results.length) return 'WARN';
-  const statuses = results.map(r => (r.status || 'UNKNOWN').toUpperCase());
+  const statuses = results.map(r => normalizeRunStatus(r.status || 'UNKNOWN'));
   if (statuses.some(s => s === 'FAIL')) return 'FAIL';
   if (statuses.some(s => s === 'WARN')) return 'WARN';
   if (statuses.every(s => s === 'OK'))  return 'OK';
@@ -110,7 +177,7 @@ function computeRisk(results) {
 
 function buildSummary(agentMap, coordinatorWarnings) {
   const results = Object.values(agentMap);
-  const statuses = results.map(r => (r.status || 'UNKNOWN').toUpperCase());
+  const statuses = results.map(r => normalizeRunStatus(r.status || 'UNKNOWN'));
   const allWarnings = [
     ...coordinatorWarnings,
     ...results.flatMap(r => r.warnings || []),
