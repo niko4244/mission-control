@@ -148,6 +148,16 @@ describe('mc-coordinator', () => {
     expect(JSON.stringify(skillIntake)).not.toContain('Missing required field: risk_level')
   })
 
+  it('systems-curator no longer fails on the gated mc-execute deletion path', () => {
+    const report = JSON.parse(runCoordinator({ MC_LOG_DIR: tmpDir }).stdout)
+    const systemsCurator = report.agents['systems-curator']
+
+    expect(systemsCurator).toBeDefined()
+    expect(systemsCurator.status).not.toBe('FAIL')
+    expect((systemsCurator.warnings || []).join(' ')).not.toContain('fs.unlinkSync')
+    expect(report.status).not.toBe('FAIL')
+  })
+
   // ── Log persistence ───────────────────────────────────────────────────────
 
   it('writes latest.json', () => {

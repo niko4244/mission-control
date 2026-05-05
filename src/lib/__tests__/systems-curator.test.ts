@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { spawnSync } from 'child_process'
+import fs from 'node:fs'
 import path from 'node:path'
 import curator from '../../../scripts/systems-curator.cjs'
 
@@ -60,6 +61,14 @@ describe('systems-curator helpers', () => {
     expect(findings).toHaveLength(1)
     expect(findings[0]).toContain('unlinkSync')
   })
+
+  it('does not flag explicitly gated and path-constrained mc-execute deletion', () => {
+    const source = fs.readFileSync(path.resolve(PROJECT_ROOT, 'scripts/mc-execute.cjs'), 'utf-8')
+    const findings = curator.detectUnsafeExecutionPaths('scripts/mc-execute.cjs', source)
+
+    expect(findings).toEqual([])
+    expect(curator.hasExplicitDeletionSafetyGuards(source)).toBe(true)
+  })
 })
 
 describe('systems-curator CLI', () => {
@@ -104,6 +113,13 @@ describe('systems-curator CLI', () => {
     for (const warning of parsed.warnings) {
       expect(typeof warning).toBe('string')
     }
+  })
+
+  it('does not fail on the gated mc-execute deletion path', () => {
+    const parsed = JSON.parse(runScript().stdout)
+    expect(parsed.unsafe_mutable_paths).toEqual([])
+    expect(parsed.warnings.join(' ')).not.toContain('fs.unlinkSync')
+    expect(parsed.status).not.toBe('FAIL')
   })
 
   it('does not warn about PLANNED agents being absent from the coordinator', () => {

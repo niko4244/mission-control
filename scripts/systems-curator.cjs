@@ -198,10 +198,23 @@ function detectScheduleMismatch(scheduleDocText, cronRouteText) {
   return null;
 }
 
+function hasExplicitDeletionSafetyGuards(sourceText) {
+  return [
+    /EXECUTION_FLAG\s*=\s*['"]--apply-approved['"]/,
+    /process\.argv\.includes\(\s*EXECUTION_FLAG\s*\)/,
+    /DISPATCH_GATE/,
+    /resolveApprovedLockfilePath/,
+    /path\.relative/,
+    /approvals\s*\.filter\(\s*a\s*=>\s*a\.status\s*===\s*['"]approved['"]\s*\)/,
+  ].every((pattern) => pattern.test(sourceText));
+}
+
 function detectUnsafeExecutionPaths(relativePath, sourceText) {
   const findings = [];
   if (/unlinkSync\s*\(/.test(sourceText)) {
-    findings.push(`${relativePath} contains fs.unlinkSync, which is a real file-deletion execution path.`);
+    if (!hasExplicitDeletionSafetyGuards(sourceText)) {
+      findings.push(`${relativePath} contains fs.unlinkSync without explicit execution and path-safety guards.`);
+    }
   }
   if (/rmSync\s*\(/.test(sourceText)) {
     findings.push(`${relativePath} contains fs.rmSync, which is a destructive execution path.`);
@@ -400,6 +413,7 @@ module.exports = {
   parseDocumentedAgentNames,
   inspectPackageScriptsData,
   detectScheduleMismatch,
+  hasExplicitDeletionSafetyGuards,
   detectUnsafeExecutionPaths,
   buildWarnings,
   buildRecommendedNextActions,

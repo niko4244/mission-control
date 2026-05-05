@@ -268,7 +268,7 @@ persistLogs(report);
 console.log(JSON.stringify(report, null, 2));
 
 if (executeRequested && preflightResult.status !== 'FAIL') {
-  const executeResult = spawnSync('node', [path.join(__dirname, 'mc-execute.cjs')], {
+  const executeResult = spawnSync('node', [path.join(__dirname, 'mc-execute.cjs'), '--apply-approved'], {
     encoding: 'utf-8',
     cwd: ROOT,
     env: { ...process.env, MC_LOG_DIR: LOG_DIR },
