@@ -137,6 +137,17 @@ describe('mc-coordinator', () => {
     expect(agents).toHaveProperty('skill-intake')
   })
 
+  it('skill-intake no longer fails canonical schema verification for missing risk_level', () => {
+    const report = JSON.parse(runCoordinator({ MC_LOG_DIR: tmpDir }).stdout)
+    const skillIntake = report.agents['skill-intake']
+
+    expect(skillIntake).toBeDefined()
+    expect(skillIntake.status).toBe('PASS')
+    expect(skillIntake.risk_level).toBe(0)
+    expect(skillIntake.warnings || []).not.toContain('Missing required field: risk_level')
+    expect(JSON.stringify(skillIntake)).not.toContain('Missing required field: risk_level')
+  })
+
   // ── Log persistence ───────────────────────────────────────────────────────
 
   it('writes latest.json', () => {
