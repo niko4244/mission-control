@@ -6,6 +6,7 @@ import path from 'path'
 import { requireRole, getUserFromRequest } from '@/lib/auth'
 import { getDatabase, logAuditEvent } from '@/lib/db'
 import { logger } from '@/lib/logger'
+import { listTenants } from '@/lib/tenant-queries'
 
 export interface OsUser {
   username: string
@@ -232,7 +233,6 @@ export async function GET(request: NextRequest) {
 
   // Cross-reference with existing tenants to mark linked ones
   try {
-    const { listTenants } = await import('@/lib/super-admin')
     const tenants = listTenants()
     const tenantByLinuxUser = new Map(tenants.map(t => [t.linux_user, t.id]))
     for (const user of users) {
