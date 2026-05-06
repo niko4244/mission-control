@@ -396,6 +396,113 @@ describe('scanRedFlags', () => {
     expect(flag?.context_type).toBe('docs')
     expect(flag?.production_impact).toBe(false)
   })
+
+  it('allowlists bounded local preflight spawnSync usage', () => {
+    const diff = [
+      'diff --git a/scripts/mission-control-preflight.cjs b/scripts/mission-control-preflight.cjs',
+      '--- a/scripts/mission-control-preflight.cjs',
+      '+++ b/scripts/mission-control-preflight.cjs',
+      '@@ -1,0 +1,9 @@',
+      '+function defaultRunCommand(command, args, cwd) {',
+      '+  for (const candidate of commandCandidates(command)) {',
+      '+    const result = spawnSync(candidate, args, {',
+      "+      stdio: ['ignore', 'pipe', 'pipe'],",
+      '+      shell: useShellForCandidate(candidate),',
+      '+      windowsHide: true,',
+      '+      timeout: 5000,',
+      '+    })',
+      '+  }',
+    ].join('\n')
+    const flags = reviewer.scanRedFlags(diff)
+    const flag = flags.find((f) => f.flag === 'shell-execution')
+    expect(flag).toBeDefined()
+    expect(flag?.allowed).toBe(true)
+    expect(flag?.allow_reason).toContain('controlled command candidate list')
+    expect(flag?.production_impact).toBe(false)
+    expect(flag?.requires_human_review).toBe(false)
+  })
+
+  it('allowlists bounded local mc-coordinator spawnSync usage', () => {
+    const diff = [
+      'diff --git a/scripts/mc-coordinator.cjs b/scripts/mc-coordinator.cjs',
+      '--- a/scripts/mc-coordinator.cjs',
+      '+++ b/scripts/mc-coordinator.cjs',
+      '@@ -1,0 +1,10 @@',
+      "+if (executeRequested && preflightResult.status !== 'FAIL') {",
+      "+  const executeResult = spawnSync('node', [path.join(__dirname, 'mc-execute.cjs'), '--apply-approved'], {",
+      '+    env: { ...process.env, MC_LOG_DIR: LOG_DIR },',
+      "+    stdio: ['pipe', 'pipe', 'pipe'],",
+      '+    timeout: 30000,',
+      '+  })',
+      '+}',
+    ].join('\n')
+    const flags = reviewer.scanRedFlags(diff)
+    const flag = flags.find((f) => f.flag === 'shell-execution')
+    expect(flag).toBeDefined()
+    expect(flag?.allowed).toBe(true)
+    expect(flag?.allow_reason).toContain('mc-execute')
+    expect(flag?.production_impact).toBe(false)
+  })
+
+  it('allowlists mc-coordinator when diff context omits stdio/timeout but the guarded local pattern is present', () => {
+    const diff = [
+      'diff --git a/scripts/mc-coordinator.cjs b/scripts/mc-coordinator.cjs',
+      '--- a/scripts/mc-coordinator.cjs',
+      '+++ b/scripts/mc-coordinator.cjs',
+      '@@ -1,0 +1,8 @@',
+      '+const executeRequested = process.argv.includes(\'--execute\');',
+      "+if (executeRequested && preflightResult.status !== 'FAIL') {",
+      "+  const executeResult = spawnSync('node', [path.join(__dirname, 'mc-execute.cjs'), '--apply-approved'], {",
+      '+    encoding: \'utf-8\',',
+      '+    cwd: ROOT,',
+      '+    env: { ...process.env, MC_LOG_DIR: LOG_DIR },',
+      '+  })',
+      '+}',
+    ].join('\n')
+    const flags = reviewer.scanRedFlags(diff)
+    const flag = flags.find((f) => f.flag === 'shell-execution')
+    expect(flag).toBeDefined()
+    expect(flag?.allowed).toBe(true)
+    expect(flag?.production_impact).toBe(false)
+  })
+
+  it('does not allow shell execution in API routes', () => {
+    const diff = makeDiff('src/app/api/example/route.ts', ["  const out = spawnSync('node', ['danger'], { stdio: 'pipe', timeout: 5000 });"])
+    const flags = reviewer.scanRedFlags(diff)
+    const flag = flags.find((f) => f.flag === 'shell-execution')
+    expect(flag).toBeDefined()
+    expect(flag?.allowed).toBe(false)
+    expect(flag?.production_impact).toBe(true)
+  })
+
+  it('does not allow user-controlled command strings in production scripts', () => {
+    const diff = makeDiff('scripts/example.cjs', ['  const out = spawnSync(userCommand, userArgs, { stdio: \'pipe\', timeout: 5000 });'])
+    const flags = reviewer.scanRedFlags(diff)
+    const flag = flags.find((f) => f.flag === 'shell-execution')
+    expect(flag).toBeDefined()
+    expect(flag?.allowed).toBe(false)
+    expect(flag?.production_impact).toBe(true)
+  })
+
+  it('does not allow missing timeout in allowlisted files', () => {
+    const diff = [
+      'diff --git a/scripts/mc-coordinator.cjs b/scripts/mc-coordinator.cjs',
+      '--- a/scripts/mc-coordinator.cjs',
+      '+++ b/scripts/mc-coordinator.cjs',
+      '@@ -1,0 +1,8 @@',
+      "+if (executeRequested && preflightResult.status !== 'FAIL') {",
+      "+  const executeResult = spawnSync('node', [path.join(__dirname, 'mc-execute.cjs'), '--apply-approved'], {",
+      '+    env: { ...process.env, MC_LOG_DIR: LOG_DIR },',
+      "+    stdio: ['pipe', 'pipe', 'pipe'],",
+      '+  })',
+      '+}',
+    ].join('\n')
+    const flags = reviewer.scanRedFlags(diff)
+    const flag = flags.find((f) => f.flag === 'shell-execution')
+    expect(flag).toBeDefined()
+    expect(flag?.allowed).toBe(false)
+    expect(flag?.production_impact).toBe(true)
+  })
 })
 
 // ── buildVerdict ──────────────────────────────────────────────────────────────
@@ -487,6 +594,25 @@ describe('buildVerdict', () => {
         message: 'shell-execution pattern matched in documentation/example text',
       },
     ]
+    const v = reviewer.buildVerdict([], flags, passedValidation)
+    expect(v.status).toBe('WARN')
+    expect(v.risk_level).toBe(1)
+    expect(v.recommendation).toContain('SAFE WITH NOTES')
+  })
+
+  it('returns WARN with risk 1 for allowlisted local shell execution findings', () => {
+    const flags = [{
+      flag: 'shell-execution',
+      severity: 'high',
+      path: 'scripts/mission-control-preflight.cjs',
+      line: 10,
+      context_type: 'production',
+      production_impact: false,
+      allowed: true,
+      allow_reason: 'bounded local preflight probe over a controlled command candidate list',
+      requires_human_review: false,
+      message: 'shell-execution matched an allowlisted local Mission Control pattern',
+    }]
     const v = reviewer.buildVerdict([], flags, passedValidation)
     expect(v.status).toBe('WARN')
     expect(v.risk_level).toBe(1)
@@ -648,6 +774,29 @@ describe('buildMarkdownComment', () => {
     expect(md).toContain('Non-production/Test Fixture Findings')
     expect(md).toContain('src/lib/__tests__/pr-reviewer-bot.test.ts:5')
     expect(md).toContain('test')
+  })
+
+  it('includes allowlisted local execution findings in their own section', () => {
+    const reportWithFlags = {
+      ...baseReport,
+      red_flags: [{
+        flag: 'shell-execution',
+        severity: 'high',
+        path: 'scripts/mission-control-preflight.cjs',
+        line: 35,
+        context_type: 'production',
+        production_impact: false,
+        allowed: true,
+        allow_reason: 'bounded local preflight probe over a controlled command candidate list',
+        requires_human_review: false,
+        message: 'shell-execution matched an allowlisted local Mission Control pattern',
+        excerpt: "const result = spawnSync(candidate, args, {",
+      }],
+    }
+    const md = reviewer.buildMarkdownComment(reportWithFlags)
+    expect(md).toContain('Allowed Local Command Execution Findings')
+    expect(md).toContain('controlled command candidate list')
+    expect(md).toContain('scripts/mission-control-preflight.cjs:35')
   })
 
   it('handles missing pr_meta gracefully', () => {

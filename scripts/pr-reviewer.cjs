@@ -393,6 +393,89 @@ function buildFindingMessage(flag, entry, contextType) {
   return `${flag} pattern matched in production code at ${location}`;
 }
 
+function buildAllowedFindingMessage(flag, entry, allowReason) {
+  const location = entry.path ? `${entry.path}:${entry.line}` : 'unknown location';
+  return `${flag} matched an allowlisted local Mission Control pattern at ${location} (${allowReason})`;
+}
+
+function getFileEntryText(entries, kind) {
+  return entries
+    .filter((entry) => !kind || entry.kind === kind)
+    .map((entry) => entry.text)
+    .join('\n');
+}
+
+function tryReadRepoFile(relativePath) {
+  try {
+    return fs.readFileSync(path.join(ROOT, relativePath), 'utf-8');
+  } catch {
+    return '';
+  }
+}
+
+function classifyShellExecutionAllowance(entry, fileEntries) {
+  if (!entry || entry.flag !== 'shell-execution' || entry.context_type !== 'production') {
+    return { allowed: false, allow_reason: null };
+  }
+
+  if (/^src\/app\/api\//.test(entry.path || '')) {
+    return { allowed: false, allow_reason: null };
+  }
+
+  const addedText = getFileEntryText(fileEntries, 'add');
+
+  if (entry.path === 'scripts/mission-control-preflight.cjs') {
+    const fileText = tryReadRepoFile(entry.path);
+    const diffShowsStdio = /stdio:\s*\['ignore',\s*'pipe',\s*'pipe'\]/.test(addedText);
+    const diffShowsTimeout = /timeout:\s*5000/.test(addedText);
+    const canUseFileFallback = !diffShowsStdio && !diffShowsTimeout;
+    const hasSafeStdio = diffShowsStdio || (canUseFileFallback && /stdio:\s*\['ignore',\s*'pipe',\s*'pipe'\]/.test(fileText));
+    const hasSafeTimeout = diffShowsTimeout || (canUseFileFallback && /timeout:\s*5000/.test(fileText));
+    const isAllowlisted =
+      /spawnSync\(candidate,\s*args,\s*\{/.test(entry.text) &&
+      /for\s*\(const candidate of commandCandidates\(command\)\)/.test(addedText) &&
+      /shell:\s*useShellForCandidate\(candidate\)/.test(addedText) &&
+      hasSafeStdio &&
+      hasSafeTimeout &&
+      /windowsHide:\s*true/.test(addedText) &&
+      /function defaultRunCommand/.test(addedText);
+
+    return {
+      allowed: isAllowlisted,
+      allow_reason: isAllowlisted
+        ? 'bounded local preflight probe over a controlled command candidate list'
+        : null,
+    };
+  }
+
+  if (entry.path === 'scripts/mc-coordinator.cjs') {
+    const fileText = tryReadRepoFile(entry.path);
+    const diffShowsStdio = /stdio:\s*\['pipe',\s*'pipe',\s*'pipe'\]/.test(addedText);
+    const diffShowsTimeout = /timeout:\s*30000/.test(addedText);
+    const canUseFileFallback = !diffShowsStdio && !diffShowsTimeout;
+    const hasSafeStdio = diffShowsStdio || (canUseFileFallback && /stdio:\s*\['pipe',\s*'pipe',\s*'pipe'\]/.test(fileText));
+    const hasSafeTimeout = diffShowsTimeout || (canUseFileFallback && /timeout:\s*30000/.test(fileText));
+    const hasLocalRootCwd = /cwd:\s*ROOT/.test(addedText) || /cwd:\s*ROOT/.test(fileText);
+    const isAllowlisted =
+      /spawnSync\('node'/.test(entry.text) &&
+      /path\.join\(__dirname,\s*'mc-execute\.cjs'\)/.test(addedText) &&
+      /'--apply-approved'/.test(addedText) &&
+      /if\s*\(executeRequested && preflightResult\.status !== 'FAIL'\)/.test(addedText) &&
+      hasLocalRootCwd &&
+      hasSafeStdio &&
+      hasSafeTimeout;
+
+    return {
+      allowed: isAllowlisted,
+      allow_reason: isAllowlisted
+        ? 'bounded local Mission Control orchestration of mc-execute with explicit apply approval'
+        : null,
+    };
+  }
+
+  return { allowed: false, allow_reason: null };
+}
+
 function scanRedFlags(diff) {
   if (!diff) {
     return [{
@@ -402,6 +485,9 @@ function scanRedFlags(diff) {
       line: null,
       context_type: 'unknown',
       production_impact: true,
+      allowed: false,
+      allow_reason: null,
+      requires_human_review: true,
       message: 'PR diff could not be inspected; red-flag scan is incomplete.',
       excerpt: null,
     }];
@@ -415,12 +501,23 @@ function scanRedFlags(diff) {
       line: null,
       context_type: 'unknown',
       production_impact: true,
+      allowed: false,
+      allow_reason: null,
+      requires_human_review: true,
       message: 'PR diff could not be inspected; red-flag scan is incomplete.',
       excerpt: null,
     }];
   }
 
   const findings = [];
+  const entriesByPath = new Map();
+
+  for (const entry of entries) {
+    if (!entriesByPath.has(entry.path)) {
+      entriesByPath.set(entry.path, []);
+    }
+    entriesByPath.get(entry.path).push(entry);
+  }
 
   for (const entry of entries) {
     const contextType = classifyContextType(entry.path);
@@ -431,14 +528,27 @@ function scanRedFlags(diff) {
       if (!shouldScan) continue;
       if (!pattern.test(entry.text)) continue;
 
+      const allowance = classifyShellExecutionAllowance({
+        flag: name,
+        path: entry.path,
+        context_type: contextType,
+        text: entry.text,
+      }, entriesByPath.get(entry.path) || []);
+      const productionImpactAfterAllowance = productionImpact && !allowance.allowed;
+
       findings.push({
         flag: name,
         severity,
         path: entry.path,
         line: entry.line,
         context_type: contextType,
-        production_impact: productionImpact,
-        message: buildFindingMessage(name, entry, contextType),
+        production_impact: productionImpactAfterAllowance,
+        allowed: allowance.allowed,
+        allow_reason: allowance.allow_reason,
+        requires_human_review: productionImpactAfterAllowance,
+        message: allowance.allowed
+          ? buildAllowedFindingMessage(name, entry, allowance.allow_reason)
+          : buildFindingMessage(name, entry, contextType),
         excerpt: entry.text.slice(0, 120),
       });
     }
@@ -516,6 +626,7 @@ function buildVerdict(files, redFlags, validation) {
   const diffUnavailable = redFlags.some((f) => f.flag === 'diff-unavailable');
   const productionFlags = redFlags.filter((f) => f.production_impact === true);
   const nonProductionFlags = redFlags.filter((f) => f.production_impact === false);
+  const allowedFlags = redFlags.filter((f) => f.allowed === true);
   const criticalFlags = productionFlags.filter((f) => f.severity === 'critical');
   const highFlags = productionFlags.filter((f) => f.severity === 'high');
   const highRiskFiles = files.filter((f) => f.risk === 'high');
@@ -525,6 +636,7 @@ function buildVerdict(files, redFlags, validation) {
   const summarizedCritical = summarizeFlags(criticalFlags);
   const summarizedHigh = summarizeFlags(highFlags);
   const summarizedNonProd = summarizeFlags(nonProductionFlags);
+  const summarizedAllowed = summarizeFlags(allowedFlags);
 
   if (diffUnavailable) {
     reasons.push('PR diff could not be inspected');
@@ -569,6 +681,9 @@ function buildVerdict(files, redFlags, validation) {
   if (summarizedNonProd.length > 0) {
     reasons.push(`${nonProductionFlags.length} non-production finding(s): ${summarizedNonProd.map((f) => `${f.flag} (${f.count})`).join(', ')}`);
   }
+  if (summarizedAllowed.length > 0) {
+    reasons.push(`${allowedFlags.length} allowlisted local execution finding(s): ${summarizedAllowed.map((f) => `${f.flag} (${f.count})`).join(', ')}`);
+  }
   if (highRiskFiles.length > 0) {
     reasons.push(`${highRiskFiles.length} high-risk file(s) modified`);
   }
@@ -597,6 +712,7 @@ function buildMarkdownComment(report) {
   const rl = verdict.risk_level;
   const icon = rl >= 3 ? '🔴' : rl >= 1 ? '🟡' : '🟢';
   const productionFlags = (red_flags || []).filter((f) => f.production_impact === true);
+  const allowedFlags = (red_flags || []).filter((f) => f.allowed === true);
   const nonProductionFlags = (red_flags || []).filter((f) => f.production_impact === false);
   const lines = [];
 
@@ -656,6 +772,17 @@ function buildMarkdownComment(report) {
   } else {
     for (const flag of productionFlags) {
       lines.push(`- **${flag.flag}** (${flag.severity}) — \`${flag.path}:${flag.line}\` — ${flag.message}`);
+      if (flag.excerpt) lines.push(`  \`${flag.excerpt}\``);
+    }
+  }
+  lines.push('');
+
+  lines.push('### Allowed Local Command Execution Findings');
+  if (allowedFlags.length === 0) {
+    lines.push('- None detected');
+  } else {
+    for (const flag of allowedFlags) {
+      lines.push(`- **${flag.flag}** (${flag.severity}) — \`${flag.path}:${flag.line}\` — ${flag.allow_reason}`);
       if (flag.excerpt) lines.push(`  \`${flag.excerpt}\``);
     }
   }

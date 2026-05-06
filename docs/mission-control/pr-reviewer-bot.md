@@ -54,6 +54,17 @@ pnpm pr:review -- --repo owner/repo --pr 123
    - `tests-removed` (medium): test files deleted from diff
    - Each finding records `flag`, `severity`, `path`, `line`, `context_type`, `production_impact`, and `message`
    - Test fixtures, docs examples, and the reviewer’s own static detector catalog are reported as non-production findings by default
+   - `shell-execution` can be allowlisted only for narrow local Mission Control patterns when all are true:
+     - file path is explicitly allowlisted
+     - command is bounded/known or drawn from a controlled candidate list
+     - timeout is present
+     - stdio is piped or ignored, never inherited interactive shell
+     - no user-provided arbitrary command string is executed directly
+     - behavior is local preflight, validation, or observe-only orchestration
+   - Current shell-execution allowlist is intentionally narrow:
+     - `scripts/mission-control-preflight.cjs`
+     - `scripts/mc-coordinator.cjs`
+   - API routes, approval paths, bot execution paths, and arbitrary scripts are never allowlisted by default
 7. **Run local validation suite**:
    - `pnpm typecheck`
    - `pnpm test --run`
@@ -67,6 +78,7 @@ pnpm pr:review -- --repo owner/repo --pr 123
 9. **Emit structured JSON** to stdout.
 10. **Generate Markdown reviewer comment** with separate sections for:
     - Production red flags
+    - Allowed local command execution findings
     - Non-production/Test fixture findings
     - Validation results
     - Merge verdict
@@ -118,6 +130,9 @@ Passing `--merge` or `--auto-merge` immediately exits 1 with a structured JSON r
       "line": 18,
       "context_type": "production",
       "production_impact": true,
+      "allowed": false,
+      "allow_reason": null,
+      "requires_human_review": true,
       "message": "dynamic-execution pattern matched in production code at src/app/api/example/route.ts:18",
       "excerpt": "const result = eval(userInput);"
     }
@@ -153,7 +168,7 @@ Passing `--merge` or `--auto-merge` immediately exits 1 with a structured JSON r
 | Level | Status | Trigger |
 |---|---|---|
 | 0 | OK | No production-impacting issues detected and validation passed |
-| 1 | WARN | Non-production/test fixture findings or high-risk file changes without production-impacting red flags |
+| 1 | WARN | Non-production/test fixture findings, allowlisted local execution findings, or high-risk file changes without production-impacting red flags |
 | 2 | FAIL | Production-impacting high-severity red flags |
 | 3 | FAIL | Production-impacting critical red flags, validation failure, or missing diff |
 
