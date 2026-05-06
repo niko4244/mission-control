@@ -219,6 +219,21 @@ function classifyFile(filePath) {
   return { category: 'other', risk: 'low' };
 }
 
+function classifyContextType(filePath) {
+  if (!filePath) return 'unknown';
+  if (filePath === 'scripts/pr-reviewer.cjs') return 'tooling/reviewer-self';
+  if (/^docs\/|\.md$/i.test(filePath)) return 'docs';
+  if (/(^|\/)__tests__\/|(\.test|\.spec)\.[jt]sx?$/i.test(filePath)) return 'test';
+  if (/package\.json$|pnpm-lock\.yaml$|\.npmrc$|(^|\/)\.(env)(\.|$)|\.(yml|yaml)$|Dockerfile|docker-compose/i.test(filePath)) {
+    return 'config';
+  }
+  return 'production';
+}
+
+function hasProductionImpact(contextType) {
+  return contextType === 'production' || contextType === 'config';
+}
+
 const STRICT_ZONE_PATTERNS = [
   /^scripts\//,
   /^src\/app\/api\//,
@@ -274,43 +289,158 @@ const RED_FLAG_PATTERNS = [
   },
   {
     name: 'tests-removed',
-    pattern: /^-\s*(it|describe|test)\s*\(/,
+    pattern: /^\s*(it|describe|test)\s*\(/,
     severity: 'medium',
   },
   {
     name: 'new-dependency',
-    pattern: /^\+\s*"(?!@types\/)[a-z@][a-z0-9/@._-]+"\s*:/,
+    pattern: /^\s*"(?!@types\/)[a-z@][a-z0-9/@._-]+"\s*:/,
     severity: 'medium',
   },
 ];
+
+function parseDiffLines(diff) {
+  const entries = [];
+  const lines = diff.split('\n');
+  let currentFile = null;
+  let pendingOldPath = null;
+  let pendingNewPath = null;
+  let oldLine = 0;
+  let newLine = 0;
+  let inHunk = false;
+
+  for (const rawLine of lines) {
+    if (rawLine.startsWith('diff --git ')) {
+      currentFile = null;
+      pendingOldPath = null;
+      pendingNewPath = null;
+      inHunk = false;
+      continue;
+    }
+
+    if (rawLine.startsWith('--- ')) {
+      const source = rawLine.slice(4).trim();
+      pendingOldPath = source === '/dev/null' ? null : source.replace(/^a\//, '');
+      continue;
+    }
+
+    if (rawLine.startsWith('+++ ')) {
+      const source = rawLine.slice(4).trim();
+      pendingNewPath = source === '/dev/null' ? null : source.replace(/^b\//, '');
+      currentFile = pendingNewPath || pendingOldPath;
+      continue;
+    }
+
+    if (rawLine.startsWith('@@ ')) {
+      const match = rawLine.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+      if (!match) {
+        inHunk = false;
+        continue;
+      }
+      oldLine = Number(match[1]);
+      newLine = Number(match[2]);
+      inHunk = true;
+      continue;
+    }
+
+    if (!inHunk || !currentFile || rawLine === '\\ No newline at end of file') {
+      continue;
+    }
+
+    if (rawLine.startsWith('+') && !rawLine.startsWith('+++')) {
+      entries.push({
+        kind: 'add',
+        path: currentFile,
+        line: newLine,
+        text: rawLine.slice(1),
+      });
+      newLine += 1;
+      continue;
+    }
+
+    if (rawLine.startsWith('-') && !rawLine.startsWith('---')) {
+      entries.push({
+        kind: 'remove',
+        path: currentFile,
+        line: oldLine,
+        text: rawLine.slice(1),
+      });
+      oldLine += 1;
+      continue;
+    }
+
+    oldLine += 1;
+    newLine += 1;
+  }
+
+  return entries;
+}
+
+function buildFindingMessage(flag, entry, contextType) {
+  const location = entry.path ? `${entry.path}:${entry.line}` : 'unknown location';
+  if (contextType === 'tooling/reviewer-self') {
+    return `${flag} pattern matched in reviewer tooling at ${location}`;
+  }
+  if (contextType === 'test') {
+    return `${flag} pattern matched in test fixture at ${location}`;
+  }
+  if (contextType === 'docs') {
+    return `${flag} pattern matched in documentation/example text at ${location}`;
+  }
+  if (contextType === 'config') {
+    return `${flag} pattern matched in configuration at ${location}`;
+  }
+  return `${flag} pattern matched in production code at ${location}`;
+}
 
 function scanRedFlags(diff) {
   if (!diff) {
     return [{
       flag: 'diff-unavailable',
       severity: 'critical',
-      count: 1,
-      examples: [],
+      path: null,
+      line: null,
+      context_type: 'unknown',
+      production_impact: true,
       message: 'PR diff could not be inspected; red-flag scan is incomplete.',
+      excerpt: null,
     }];
   }
-  const findings = [];
-  const lines = diff.split('\n');
+  const entries = parseDiffLines(diff);
+  if (entries.length === 0) {
+    return [{
+      flag: 'diff-unavailable',
+      severity: 'critical',
+      path: null,
+      line: null,
+      context_type: 'unknown',
+      production_impact: true,
+      message: 'PR diff could not be inspected; red-flag scan is incomplete.',
+      excerpt: null,
+    }];
+  }
 
-  for (const { name, pattern, severity } of RED_FLAG_PATTERNS) {
-    const examples = [];
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const isAddedLine = line.startsWith('+') && !line.startsWith('+++');
-      const isRemovedLine = line.startsWith('-') && !line.startsWith('---');
-      const shouldScan = name === 'tests-removed' ? isRemovedLine : isAddedLine;
-      if (shouldScan && pattern.test(line)) {
-        examples.push({ line: i + 1, text: line.slice(0, 120) });
-        if (examples.length >= 3) break;
-      }
-    }
-    if (examples.length > 0) {
-      findings.push({ flag: name, severity, count: examples.length, examples });
+  const findings = [];
+
+  for (const entry of entries) {
+    const contextType = classifyContextType(entry.path);
+    const productionImpact = hasProductionImpact(contextType);
+
+    for (const { name, pattern, severity } of RED_FLAG_PATTERNS) {
+      const shouldScan = name === 'tests-removed' ? entry.kind === 'remove' : entry.kind === 'add';
+      if (!shouldScan) continue;
+      if (!pattern.test(entry.text)) continue;
+
+      findings.push({
+        flag: name,
+        severity,
+        path: entry.path,
+        line: entry.line,
+        context_type: contextType,
+        production_impact: productionImpact,
+        message: buildFindingMessage(name, entry, contextType),
+        excerpt: entry.text.slice(0, 120),
+      });
     }
   }
 
@@ -374,44 +504,90 @@ function runValidation(skipValidation = false) {
 
 // ── Verdict ───────────────────────────────────────────────────────────────────
 
+function summarizeFlags(flags) {
+  const counts = new Map();
+  for (const flag of flags) {
+    counts.set(flag.flag, (counts.get(flag.flag) || 0) + 1);
+  }
+  return [...counts.entries()].map(([flag, count]) => ({ flag, count }));
+}
+
 function buildVerdict(files, redFlags, validation) {
-  const criticalFlags = redFlags.filter((f) => f.severity === 'critical');
-  const highFlags = redFlags.filter((f) => f.severity === 'high');
+  const diffUnavailable = redFlags.some((f) => f.flag === 'diff-unavailable');
+  const productionFlags = redFlags.filter((f) => f.production_impact === true);
+  const nonProductionFlags = redFlags.filter((f) => f.production_impact === false);
+  const criticalFlags = productionFlags.filter((f) => f.severity === 'critical');
+  const highFlags = productionFlags.filter((f) => f.severity === 'high');
   const highRiskFiles = files.filter((f) => f.risk === 'high');
   const failedSteps = (validation.steps || []).filter((s) => !s.passed && !s.skipped);
 
-  let risk_level = 0;
   const reasons = [];
+  const summarizedCritical = summarizeFlags(criticalFlags);
+  const summarizedHigh = summarizeFlags(highFlags);
+  const summarizedNonProd = summarizeFlags(nonProductionFlags);
 
-  if (criticalFlags.length > 0) {
-    risk_level = 3;
-    reasons.push(`${criticalFlags.length} critical red flag(s): ${criticalFlags.map((f) => f.flag).join(', ')}`);
+  if (diffUnavailable) {
+    reasons.push('PR diff could not be inspected');
+    return {
+      status: 'FAIL',
+      risk_level: 3,
+      recommendation: 'BLOCK — insufficient data, diff inspection failed',
+      reasons,
+    };
   }
-  if (highFlags.length > 0) {
-    risk_level = Math.max(risk_level, 2);
-    reasons.push(`${highFlags.length} high-severity red flag(s): ${highFlags.map((f) => f.flag).join(', ')}`);
+
+  if (failedSteps.length > 0) {
+    reasons.push(`Validation failed: ${failedSteps.map((s) => s.step).join(', ')}`);
+    return {
+      status: 'FAIL',
+      risk_level: 3,
+      recommendation: 'BLOCK — validation failed',
+      reasons,
+    };
+  }
+
+  if (summarizedCritical.length > 0) {
+    reasons.push(`${criticalFlags.length} critical production red flag(s): ${summarizedCritical.map((f) => `${f.flag} (${f.count})`).join(', ')}`);
+    return {
+      status: 'FAIL',
+      risk_level: 3,
+      recommendation: 'BLOCK — production-impacting critical issues require human review before merge',
+      reasons,
+    };
+  }
+
+  if (summarizedHigh.length > 0) {
+    reasons.push(`${highFlags.length} high-severity production red flag(s): ${summarizedHigh.map((f) => `${f.flag} (${f.count})`).join(', ')}`);
+    return {
+      status: 'FAIL',
+      risk_level: 2,
+      recommendation: 'BLOCK — production-impacting high-risk issues require human review before merge',
+      reasons,
+    };
+  }
+
+  if (summarizedNonProd.length > 0) {
+    reasons.push(`${nonProductionFlags.length} non-production finding(s): ${summarizedNonProd.map((f) => `${f.flag} (${f.count})`).join(', ')}`);
   }
   if (highRiskFiles.length > 0) {
-    risk_level = Math.max(risk_level, 2);
     reasons.push(`${highRiskFiles.length} high-risk file(s) modified`);
   }
-  if (failedSteps.length > 0) {
-    risk_level = Math.max(risk_level, 2);
-    reasons.push(`Validation failed: ${failedSteps.map((s) => s.step).join(', ')}`);
-  }
-  if (risk_level === 0 && redFlags.length > 0) {
-    risk_level = 1;
-    reasons.push(`${redFlags.length} informational flag(s): ${redFlags.map((f) => f.flag).join(', ')}`);
+
+  if (reasons.length > 0) {
+    return {
+      status: 'WARN',
+      risk_level: 1,
+      recommendation: 'SAFE WITH NOTES — no production-impacting red flags detected',
+      reasons,
+    };
   }
 
-  const status = risk_level >= 2 ? 'FAIL' : risk_level === 1 ? 'WARN' : 'OK';
-  const recommendation =
-    risk_level >= 3 ? 'BLOCK — critical issues require human review before merge' :
-    risk_level === 2 ? 'REVIEW — non-trivial risk, human review required' :
-    risk_level === 1 ? 'REVIEW — minor flags, consider reviewing before merge' :
-    'LGTM — no issues detected';
-
-  return { status, risk_level, recommendation, reasons };
+  return {
+    status: 'OK',
+    risk_level: 0,
+    recommendation: 'LGTM — no production-impacting issues detected',
+    reasons,
+  };
 }
 
 // ── Markdown comment ──────────────────────────────────────────────────────────
@@ -420,6 +596,8 @@ function buildMarkdownComment(report) {
   const { pr_meta, file_summary, red_flags, validation, verdict, pr } = report;
   const rl = verdict.risk_level;
   const icon = rl >= 3 ? '🔴' : rl >= 1 ? '🟡' : '🟢';
+  const productionFlags = (red_flags || []).filter((f) => f.production_impact === true);
+  const nonProductionFlags = (red_flags || []).filter((f) => f.production_impact === false);
   const lines = [];
 
   lines.push(`## ${icon} PR Review — Mission Control Bot (Observe-Only)`);
@@ -442,7 +620,8 @@ function buildMarkdownComment(report) {
     lines.push('');
   }
 
-  lines.push(`### Verdict: ${verdict.recommendation}`);
+  lines.push('### Merge Verdict');
+  lines.push(`${verdict.recommendation}`);
   lines.push(`**Risk level**: ${verdict.risk_level}/3 | **Status**: \`${verdict.status}\``);
   if (verdict.reasons.length > 0) {
     lines.push('');
@@ -471,22 +650,30 @@ function buildMarkdownComment(report) {
     lines.push('');
   }
 
-  if (red_flags && red_flags.length > 0) {
-    lines.push('### Red Flags');
-    for (const flag of red_flags) {
-      const note = flag.message ? ` — ${flag.message}` : '';
-      lines.push(`- **${flag.flag}** (${flag.severity}): ${flag.count} occurrence(s)${note}`);
-      if (flag.examples && flag.examples.length > 0) {
-        lines.push('  ```');
-        for (const ex of flag.examples) lines.push(`  ${ex.text}`);
-        lines.push('  ```');
-      }
+  lines.push('### Production Red Flags');
+  if (productionFlags.length === 0) {
+    lines.push('- None detected');
+  } else {
+    for (const flag of productionFlags) {
+      lines.push(`- **${flag.flag}** (${flag.severity}) — \`${flag.path}:${flag.line}\` — ${flag.message}`);
+      if (flag.excerpt) lines.push(`  \`${flag.excerpt}\``);
     }
-    lines.push('');
   }
+  lines.push('');
+
+  lines.push('### Non-production/Test Fixture Findings');
+  if (nonProductionFlags.length === 0) {
+    lines.push('- None detected');
+  } else {
+    for (const flag of nonProductionFlags) {
+      lines.push(`- **${flag.flag}** (${flag.severity}) — \`${flag.path}:${flag.line}\` — ${flag.context_type}`);
+      if (flag.excerpt) lines.push(`  \`${flag.excerpt}\``);
+    }
+  }
+  lines.push('');
 
   if (validation) {
-    lines.push('### Validation');
+    lines.push('### Validation Results');
     if (validation.skipped) {
       lines.push('- ⏭ validation skipped');
     } else {
@@ -653,7 +840,10 @@ module.exports = {
   parseArgs,
   checkMergeRefusal,
   classifyFile,
+  classifyContextType,
+  hasProductionImpact,
   isStrictZone,
+  parseDiffLines,
   scanRedFlags,
   buildVerdict,
   buildMarkdownComment,

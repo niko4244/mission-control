@@ -35,7 +35,13 @@ pnpm pr:review -- --repo owner/repo --pr 123
    - **High**: `scripts/`, `src/app/api/`, `package.json`, `pnpm-lock.yaml`, `data/mission-control/agent-registry.json`, auth/middleware files
    - **Medium**: `src/lib/`, YAML/Docker config
    - **Low**: `src/components/`, test files, docs
-5. **Scan diff for red flags**:
+5. **Classify finding context**:
+   - **production**: runtime scripts, routes, libraries, shipped application code
+   - **config**: dependency/config/env/infra files that can change runtime posture
+   - **test**: `src/lib/__tests__/`, `*.test.*`, `*.spec.*`
+   - **docs**: `docs/**`, Markdown examples
+   - **tooling/reviewer-self**: reviewer implementation and detector catalog
+6. **Scan diff for red flags**:
    - `dynamic-execution` (critical): `eval()`, `new Function()`
    - `auth-bypass` (critical): skipAuth, isAuthenticated === false
    - `approval-bypass` (critical): skipApproval, auto-approve, skip-gate
@@ -46,16 +52,25 @@ pnpm pr:review -- --repo owner/repo --pr 123
    - `network-call` (medium): fetch, axios, https.get
    - `new-dependency` (medium): new package added to package.json
    - `tests-removed` (medium): test files deleted from diff
-6. **Run local validation suite**:
+   - Each finding records `flag`, `severity`, `path`, `line`, `context_type`, `production_impact`, and `message`
+   - Test fixtures, docs examples, and the reviewer’s own static detector catalog are reported as non-production findings by default
+7. **Run local validation suite**:
    - `pnpm typecheck`
    - `pnpm test --run`
    - `pnpm build`
    - `node scripts/systems-curator.cjs`
    - `node scripts/mc-coordinator.cjs`
-7. **Compute verdict**: risk level 0–3, status OK/WARN/FAIL, recommendation string.
-8. **Emit structured JSON** to stdout.
-9. **Generate Markdown reviewer comment** (always included in `markdown_comment` field).
-10. **Optionally post comment** via `--post-comment` flag:
+8. **Compute verdict**:
+   - **BLOCK** only for production-impacting high/critical red flags, validation failures, or missing diff data
+   - **SAFE WITH NOTES** for non-production findings (tests/docs/tooling fixtures) when validation passes
+   - **LGTM** when no production-impacting issues are detected
+9. **Emit structured JSON** to stdout.
+10. **Generate Markdown reviewer comment** with separate sections for:
+    - Production red flags
+    - Non-production/Test fixture findings
+    - Validation results
+    - Merge verdict
+11. **Optionally post comment** via `--post-comment` flag:
     - If gh is authenticated: posts via `gh pr comment`
     - If gh is unavailable or unauthenticated: prints fallback to `comment_posted.reason`, comment text is in `markdown_comment`
 
@@ -96,7 +111,16 @@ Passing `--merge` or `--auto-merge` immediately exits 1 with a structured JSON r
     "high_risk_count": 1, "medium_risk_count": 2, "low_risk_count": 2
   },
   "red_flags": [
-    { "flag": "dynamic-execution", "severity": "critical", "count": 1, "examples": [...] }
+    {
+      "flag": "dynamic-execution",
+      "severity": "critical",
+      "path": "src/app/api/example/route.ts",
+      "line": 18,
+      "context_type": "production",
+      "production_impact": true,
+      "message": "dynamic-execution pattern matched in production code at src/app/api/example/route.ts:18",
+      "excerpt": "const result = eval(userInput);"
+    }
   ],
   "validation": {
     "passed": true,
@@ -110,13 +134,13 @@ Passing `--merge` or `--auto-merge` immediately exits 1 with a structured JSON r
     ]
   },
   "verdict": {
-    "status": "FAIL",
-    "risk_level": 2,
-    "recommendation": "REVIEW — non-trivial risk, human review required",
-    "reasons": ["1 high-risk file(s) modified"]
+    "status": "WARN",
+    "risk_level": 1,
+    "recommendation": "SAFE WITH NOTES — no production-impacting red flags detected",
+    "reasons": ["2 non-production finding(s): dynamic-execution (1), shell-execution (1)"]
   },
   "warnings": ["..."],
-  "recommended_next_actions": ["REVIEW — non-trivial risk, human review required"],
+  "recommended_next_actions": ["SAFE WITH NOTES — no production-impacting red flags detected"],
   "safety": { "observe_only": true, "merge_capable": false, "commit_capable": false, "push_capable": false },
   "markdown_comment": "## 🟡 PR Review — Mission Control Bot..."
 }
@@ -128,10 +152,10 @@ Passing `--merge` or `--auto-merge` immediately exits 1 with a structured JSON r
 
 | Level | Status | Trigger |
 |---|---|---|
-| 0 | OK | No flags, all files low/medium, validation passed |
-| 1 | WARN | Informational flags only (network-call, new-dependency, tests-removed) |
-| 2 | FAIL | High-severity red flags, high-risk files modified, or validation failure |
-| 3 | FAIL | Critical red flags (eval, auth-bypass, approval-bypass, secrets) |
+| 0 | OK | No production-impacting issues detected and validation passed |
+| 1 | WARN | Non-production/test fixture findings or high-risk file changes without production-impacting red flags |
+| 2 | FAIL | Production-impacting high-severity red flags |
+| 3 | FAIL | Production-impacting critical red flags, validation failure, or missing diff |
 
 ---
 

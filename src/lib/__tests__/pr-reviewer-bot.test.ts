@@ -238,12 +238,33 @@ describe('fetchPrDiffViaGit', () => {
   })
 })
 
+function makeDiff(filePath: string, lines: string[]): string {
+  return [
+    `diff --git a/${filePath} b/${filePath}`,
+    `--- a/${filePath}`,
+    `+++ b/${filePath}`,
+    '@@ -1,0 +1,' + String(lines.length) + ' @@',
+    ...lines.map((line) => `+${line}`),
+  ].join('\n')
+}
+
+function makeRemovalDiff(filePath: string, lines: string[]): string {
+  return [
+    `diff --git a/${filePath} b/${filePath}`,
+    `--- a/${filePath}`,
+    `+++ b/${filePath}`,
+    '@@ -1,' + String(lines.length) + ' +1,0 @@',
+    ...lines.map((line) => `-${line}`),
+  ].join('\n')
+}
+
 describe('scanRedFlags', () => {
   it('returns diff-unavailable flag for null diff', () => {
     const flags = reviewer.scanRedFlags(null)
     expect(flags).toHaveLength(1)
     expect(flags[0].flag).toBe('diff-unavailable')
     expect(flags[0].severity).toBe('critical')
+    expect(flags[0].production_impact).toBe(true)
   })
 
   it('diff-unavailable flag has blocking message', () => {
@@ -261,78 +282,119 @@ describe('scanRedFlags', () => {
   it('returns empty array for clean diff', () => {
     const diff = [
       'diff --git a/src/lib/utils.ts b/src/lib/utils.ts',
+      '--- a/src/lib/utils.ts',
+      '+++ b/src/lib/utils.ts',
+      '@@ -1,0 +1,1 @@',
       '+export function add(a: number, b: number) { return a + b; }',
     ].join('\n')
     expect(reviewer.scanRedFlags(diff)).toEqual([])
   })
 
   it('detects dynamic execution (eval)', () => {
-    const diff = '+  const result = eval(userInput);\n'
+    const diff = makeDiff('src/app/api/example/route.ts', ['  const result = eval(userInput);'])
     const flags = reviewer.scanRedFlags(diff)
-    expect(flags.some((f) => f.flag === 'dynamic-execution')).toBe(true)
-    expect(flags.find((f) => f.flag === 'dynamic-execution')?.severity).toBe('critical')
+    const flag = flags.find((f) => f.flag === 'dynamic-execution')
+    expect(flag).toBeDefined()
+    expect(flag?.severity).toBe('critical')
+    expect(flag?.path).toBe('src/app/api/example/route.ts')
+    expect(flag?.context_type).toBe('production')
+    expect(flag?.production_impact).toBe(true)
   })
 
   it('detects new Function', () => {
-    const diff = '+  const fn = new Function("return " + code);\n'
+    const diff = makeDiff('src/app/api/example/route.ts', ['  const fn = new Function("return " + code);'])
     const flags = reviewer.scanRedFlags(diff)
     expect(flags.some((f) => f.flag === 'dynamic-execution')).toBe(true)
   })
 
   it('detects auth bypass', () => {
-    const diff = '+  if (skipAuth) { return next(); }\n'
+    const diff = makeDiff('src/app/api/example/route.ts', ['  if (skipAuth) { return next(); }'])
     const flags = reviewer.scanRedFlags(diff)
     expect(flags.some((f) => f.flag === 'auth-bypass')).toBe(true)
     expect(flags.find((f) => f.flag === 'auth-bypass')?.severity).toBe('critical')
   })
 
   it('detects approval bypass', () => {
-    const diff = '+  const skipApproval = true;\n'
+    const diff = makeDiff('src/app/api/example/route.ts', ['  const skipApproval = true;'])
     const flags = reviewer.scanRedFlags(diff)
     expect(flags.some((f) => f.flag === 'approval-bypass')).toBe(true)
   })
 
   it('detects filesystem mutation', () => {
-    const diff = '+  fs.unlinkSync(tempFile);\n'
+    const diff = makeDiff('scripts/example.cjs', ['  fs.unlinkSync(tempFile);'])
     const flags = reviewer.scanRedFlags(diff)
     expect(flags.some((f) => f.flag === 'filesystem-mutation')).toBe(true)
     expect(flags.find((f) => f.flag === 'filesystem-mutation')?.severity).toBe('high')
   })
 
   it('detects shell execution', () => {
-    const diff = "+  const out = execSync('rm -rf /tmp/x');\n"
+    const diff = makeDiff('scripts/example.cjs', ["  const out = execSync('rm -rf /tmp/x');"])
     const flags = reviewer.scanRedFlags(diff)
     expect(flags.some((f) => f.flag === 'shell-execution')).toBe(true)
   })
 
   it('detects secrets in code', () => {
-    const diff = '+  const API_KEY = "sk-proj-abcdefghijklmn";\n'
+    const diff = makeDiff('src/lib/example.ts', ['  const API_KEY = "sk-proj-abcdefghijklmn";'])
     const flags = reviewer.scanRedFlags(diff)
     expect(flags.some((f) => f.flag === 'secrets-in-code')).toBe(true)
     expect(flags.find((f) => f.flag === 'secrets-in-code')?.severity).toBe('critical')
   })
 
   it('detects removed test assertions (it/describe blocks)', () => {
-    const diff = '-  it(\'verifies login works\', () => {\n-    expect(isLoggedIn()).toBe(true);\n-  })\n'
+    const diff = makeRemovalDiff('src/lib/__tests__/example.test.ts', [
+      "  it('verifies login works', () => {",
+      '    expect(isLoggedIn()).toBe(true);',
+      '  })',
+    ])
     const flags = reviewer.scanRedFlags(diff)
     expect(flags.some((f) => f.flag === 'tests-removed')).toBe(true)
     expect(flags.find((f) => f.flag === 'tests-removed')?.severity).toBe('medium')
   })
 
   it('does not flag removed lines for exec/auth patterns', () => {
-    const diff = '-  const result = eval(oldCode);\n'
+    const diff = makeRemovalDiff('src/app/api/example/route.ts', ['  const result = eval(oldCode);'])
     const flags = reviewer.scanRedFlags(diff)
     // Removed eval line should NOT trigger (only added lines count for non-test-removed patterns)
     expect(flags.some((f) => f.flag === 'dynamic-execution')).toBe(false)
   })
 
-  it('includes example snippets in findings', () => {
-    const diff = '+  const bad = eval(x);\n'
+  it('includes path, line, context, and excerpt in findings', () => {
+    const diff = makeDiff('src/app/api/example/route.ts', ['  const bad = eval(x);'])
     const flags = reviewer.scanRedFlags(diff)
     const flag = flags.find((f) => f.flag === 'dynamic-execution')
-    expect(flag?.examples).toBeDefined()
-    expect(flag?.examples?.length).toBeGreaterThan(0)
-    expect(flag?.examples?.[0].text).toContain('eval')
+    expect(flag?.path).toBe('src/app/api/example/route.ts')
+    expect(flag?.line).toBe(1)
+    expect(flag?.context_type).toBe('production')
+    expect(flag?.production_impact).toBe(true)
+    expect(flag?.message).toContain('production code')
+    expect(flag?.excerpt).toContain('eval')
+  })
+
+  it('marks detector patterns inside reviewer self file as non-production findings', () => {
+    const diff = makeDiff('scripts/pr-reviewer.cjs', ['  pattern: /skipAuth|bypass[_\\s-]?auth/i,'])
+    const flags = reviewer.scanRedFlags(diff)
+    const flag = flags.find((f) => f.flag === 'auth-bypass')
+    expect(flag).toBeDefined()
+    expect(flag?.context_type).toBe('tooling/reviewer-self')
+    expect(flag?.production_impact).toBe(false)
+  })
+
+  it('marks dangerous test fixtures as non-production findings', () => {
+    const diff = makeDiff('src/lib/__tests__/pr-reviewer-bot.test.ts', ["  const out = execSync('rm -rf /tmp/x');"])
+    const flags = reviewer.scanRedFlags(diff)
+    const flag = flags.find((f) => f.flag === 'shell-execution')
+    expect(flag).toBeDefined()
+    expect(flag?.context_type).toBe('test')
+    expect(flag?.production_impact).toBe(false)
+  })
+
+  it('marks docs examples as non-production findings', () => {
+    const diff = makeDiff('docs/mission-control/pr-reviewer-bot.md', ['- `execSync("rm -rf /tmp/x")`'])
+    const flags = reviewer.scanRedFlags(diff)
+    const flag = flags.find((f) => f.flag === 'shell-execution')
+    expect(flag).toBeDefined()
+    expect(flag?.context_type).toBe('docs')
+    expect(flag?.production_impact).toBe(false)
   })
 })
 
@@ -353,29 +415,46 @@ describe('buildVerdict', () => {
   })
 
   it('returns FAIL with risk 3 for critical red flags', () => {
-    const flags = [{ flag: 'dynamic-execution', severity: 'critical', count: 1, examples: [] }]
+    const flags = [{
+      flag: 'dynamic-execution',
+      severity: 'critical',
+      path: 'src/app/api/example/route.ts',
+      line: 10,
+      context_type: 'production',
+      production_impact: true,
+      message: 'dynamic-execution pattern matched in production code',
+    }]
     const v = reviewer.buildVerdict([], flags, passedValidation)
     expect(v.status).toBe('FAIL')
     expect(v.risk_level).toBe(3)
     expect(v.recommendation).toContain('BLOCK')
   })
 
-  it('returns FAIL with risk 2 for high-severity red flags', () => {
-    const flags = [{ flag: 'filesystem-mutation', severity: 'high', count: 1, examples: [] }]
+  it('returns FAIL with risk 2 for production high-severity red flags', () => {
+    const flags = [{
+      flag: 'filesystem-mutation',
+      severity: 'high',
+      path: 'scripts/example.cjs',
+      line: 4,
+      context_type: 'production',
+      production_impact: true,
+      message: 'filesystem-mutation pattern matched in production code',
+    }]
     const v = reviewer.buildVerdict([], flags, passedValidation)
     expect(v.status).toBe('FAIL')
     expect(v.risk_level).toBe(2)
-    expect(v.recommendation).toContain('REVIEW')
+    expect(v.recommendation).toContain('BLOCK')
   })
 
-  it('returns FAIL with risk 2 for high-risk files', () => {
+  it('returns WARN with risk 1 for high-risk files without production red flags', () => {
     const files = [{ path: 'scripts/foo.cjs', risk: 'high' as const, category: 'scripts', strict_zone: true }]
     const v = reviewer.buildVerdict(files, [], passedValidation)
-    expect(v.status).toBe('FAIL')
-    expect(v.risk_level).toBe(2)
+    expect(v.status).toBe('WARN')
+    expect(v.risk_level).toBe(1)
+    expect(v.recommendation).toContain('SAFE WITH NOTES')
   })
 
-  it('returns FAIL with risk 2 for failed validation', () => {
+  it('returns FAIL with risk 3 for failed validation', () => {
     const failedValidation = {
       passed: false,
       skipped: false,
@@ -383,21 +462,41 @@ describe('buildVerdict', () => {
     }
     const v = reviewer.buildVerdict([], [], failedValidation)
     expect(v.status).toBe('FAIL')
-    expect(v.risk_level).toBe(2)
+    expect(v.risk_level).toBe(3)
     expect(v.reasons.some((r: string) => r.includes('typecheck'))).toBe(true)
   })
 
-  it('returns WARN with risk 1 for medium/low flags only', () => {
-    const flags = [{ flag: 'network-call', severity: 'medium', count: 1, examples: [] }]
+  it('returns WARN with risk 1 for mixed PR with only non-production red flags', () => {
+    const flags = [
+      {
+        flag: 'dynamic-execution',
+        severity: 'critical',
+        path: 'src/lib/__tests__/pr-reviewer-bot.test.ts',
+        line: 22,
+        context_type: 'test',
+        production_impact: false,
+        message: 'dynamic-execution pattern matched in test fixture',
+      },
+      {
+        flag: 'shell-execution',
+        severity: 'high',
+        path: 'docs/mission-control/pr-reviewer-bot.md',
+        line: 11,
+        context_type: 'docs',
+        production_impact: false,
+        message: 'shell-execution pattern matched in documentation/example text',
+      },
+    ]
     const v = reviewer.buildVerdict([], flags, passedValidation)
     expect(v.status).toBe('WARN')
     expect(v.risk_level).toBe(1)
+    expect(v.recommendation).toContain('SAFE WITH NOTES')
   })
 
   it('critical takes priority over high', () => {
     const flags = [
-      { flag: 'dynamic-execution', severity: 'critical', count: 1, examples: [] },
-      { flag: 'filesystem-mutation', severity: 'high', count: 1, examples: [] },
+      { flag: 'dynamic-execution', severity: 'critical', path: 'src/app/api/example/route.ts', line: 10, context_type: 'production', production_impact: true, message: 'x' },
+      { flag: 'filesystem-mutation', severity: 'high', path: 'scripts/example.cjs', line: 4, context_type: 'production', production_impact: true, message: 'y' },
     ]
     const v = reviewer.buildVerdict([], flags, passedValidation)
     expect(v.risk_level).toBe(3)
@@ -405,7 +504,7 @@ describe('buildVerdict', () => {
   })
 
   it('includes reasons for each risk factor', () => {
-    const flags = [{ flag: 'auth-bypass', severity: 'critical', count: 1, examples: [] }]
+    const flags = [{ flag: 'auth-bypass', severity: 'critical', path: 'src/app/api/example/route.ts', line: 15, context_type: 'production', production_impact: true, message: 'x' }]
     const v = reviewer.buildVerdict([], flags, passedValidation)
     expect(v.reasons.length).toBeGreaterThan(0)
     expect(v.reasons.some((r: string) => r.includes('auth-bypass'))).toBe(true)
@@ -465,9 +564,9 @@ describe('buildMarkdownComment', () => {
       ],
     },
     verdict: {
-      status: 'FAIL',
-      risk_level: 2,
-      recommendation: 'REVIEW — non-trivial risk, human review required',
+      status: 'WARN',
+      risk_level: 1,
+      recommendation: 'SAFE WITH NOTES — no production-impacting red flags detected',
       reasons: ['1 high-risk file(s) modified'],
     },
     warnings: ['1 high-risk file(s) modified'],
@@ -491,7 +590,7 @@ describe('buildMarkdownComment', () => {
 
   it('contains verdict recommendation', () => {
     const md = reviewer.buildMarkdownComment(baseReport)
-    expect(md).toContain('REVIEW')
+    expect(md).toContain('SAFE WITH NOTES')
   })
 
   it('contains observe-only disclaimer', () => {
@@ -514,11 +613,41 @@ describe('buildMarkdownComment', () => {
   it('includes red flags when present', () => {
     const reportWithFlags = {
       ...baseReport,
-      red_flags: [{ flag: 'dynamic-execution', severity: 'critical', count: 1, examples: [{ line: 5, text: '+eval(x)' }] }],
+      red_flags: [{
+        flag: 'dynamic-execution',
+        severity: 'critical',
+        path: 'src/app/api/example/route.ts',
+        line: 5,
+        context_type: 'production',
+        production_impact: true,
+        message: 'dynamic-execution pattern matched in production code at src/app/api/example/route.ts:5',
+        excerpt: 'const bad = eval(x)',
+      }],
     }
     const md = reviewer.buildMarkdownComment(reportWithFlags)
+    expect(md).toContain('Production Red Flags')
     expect(md).toContain('dynamic-execution')
     expect(md).toContain('critical')
+  })
+
+  it('includes non-production findings in their own section', () => {
+    const reportWithFlags = {
+      ...baseReport,
+      red_flags: [{
+        flag: 'shell-execution',
+        severity: 'high',
+        path: 'src/lib/__tests__/pr-reviewer-bot.test.ts',
+        line: 5,
+        context_type: 'test',
+        production_impact: false,
+        message: 'shell-execution pattern matched in test fixture',
+        excerpt: "const out = execSync('rm -rf /tmp/x')",
+      }],
+    }
+    const md = reviewer.buildMarkdownComment(reportWithFlags)
+    expect(md).toContain('Non-production/Test Fixture Findings')
+    expect(md).toContain('src/lib/__tests__/pr-reviewer-bot.test.ts:5')
+    expect(md).toContain('test')
   })
 
   it('handles missing pr_meta gracefully', () => {
@@ -536,7 +665,7 @@ describe('buildMarkdownComment', () => {
       verdict: {
         status: 'FAIL',
         risk_level: 3,
-        recommendation: 'BLOCK — critical issues require human review before merge',
+        recommendation: 'BLOCK — insufficient data, diff inspection failed',
         reasons: ['1 critical red flag(s): diff-unavailable'],
       },
     }
@@ -560,7 +689,7 @@ describe('buildMarkdownComment', () => {
       verdict: {
         status: 'FAIL',
         risk_level: 3,
-        recommendation: 'BLOCK — critical issues require human review before merge',
+        recommendation: 'BLOCK — insufficient data, diff inspection failed',
         reasons: ['1 critical red flag(s): diff-unavailable'],
       },
     }
