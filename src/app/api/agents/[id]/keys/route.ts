@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireRole } from '@/lib/auth'
 import { getDatabase } from '@/lib/db'
 import { logger } from '@/lib/logger'
+import { requireWorkspaceId } from '@/lib/enforcement/workspace-scope'
 
 const ALLOWED_SCOPES = new Set([
   'viewer',
@@ -90,7 +91,9 @@ export async function GET(
   try {
     const db = getDatabase()
     const resolved = await params
-    const workspaceId = auth.user.workspace_id ?? 1
+    const wsResult = requireWorkspaceId(auth.user)
+    if (!('workspaceId' in wsResult)) return wsResult.response
+    const { workspaceId } = wsResult
     const agent = resolveAgent(db, resolved.id, workspaceId)
     if (!agent) return NextResponse.json({ error: 'Agent not found' }, { status: 404 })
 
@@ -133,7 +136,9 @@ export async function POST(
   try {
     const db = getDatabase()
     const resolved = await params
-    const workspaceId = auth.user.workspace_id ?? 1
+    const wsResult = requireWorkspaceId(auth.user)
+    if (!('workspaceId' in wsResult)) return wsResult.response
+    const { workspaceId } = wsResult
     const agent = resolveAgent(db, resolved.id, workspaceId)
     if (!agent) return NextResponse.json({ error: 'Agent not found' }, { status: 404 })
 
@@ -203,7 +208,9 @@ export async function DELETE(
   try {
     const db = getDatabase()
     const resolved = await params
-    const workspaceId = auth.user.workspace_id ?? 1
+    const wsResult = requireWorkspaceId(auth.user)
+    if (!('workspaceId' in wsResult)) return wsResult.response
+    const { workspaceId } = wsResult
     const agent = resolveAgent(db, resolved.id, workspaceId)
     if (!agent) return NextResponse.json({ error: 'Agent not found' }, { status: 404 })
 
