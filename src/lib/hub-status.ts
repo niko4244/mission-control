@@ -1,3 +1,4 @@
+import { createHash, createHmac } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { getDatabase } from '@/lib/db'
@@ -57,6 +58,24 @@ export interface RemoteHubStatus {
     last_started_at: string
     summary: string
   }
+}
+
+export interface HubStatusSnapshot {
+  generated_at: string
+  workspace_id: number
+  hub_status: HubStatusLevel
+  digest_hash: string
+  signature_status: 'signed' | 'unsigned'
+  signature: string | null
+  summary: {
+    active_agents: number
+    total_agents: number
+    queued_tasks: number
+    in_progress_tasks: number
+    warning_count_24h: number
+    error_count_24h: number
+  }
+  warnings: string[]
 }
 
 function makeCheck(name: string, status: HubStatusLevel, reason: string): HubStatusCheck {
@@ -445,5 +464,65 @@ export function collectRemoteHubStatus(workspaceId: number, repoRoot: string = p
     task_queue_summary: queue.payload,
     recent_signals: signals.payload,
     runtime: runtime.payload,
+  }
+}
+
+function getHubStatusSigningKey(): string | null {
+  const key = (process.env.MC_HUB_STATUS_SIGNING_KEY || '').trim()
+  return key || null
+}
+
+export function createHubStatusSnapshot(
+  status: RemoteHubStatus,
+  workspaceId: number,
+): HubStatusSnapshot {
+  const generatedAt = new Date(status.timestamp * 1000).toISOString()
+  const summary = {
+    active_agents: status.heartbeat_summary.active_agents,
+    total_agents: status.heartbeat_summary.total_agents,
+    queued_tasks: status.task_queue_summary.queued_tasks,
+    in_progress_tasks: status.task_queue_summary.in_progress_tasks,
+    warning_count_24h: status.recent_signals.warning_count_24h,
+    error_count_24h: status.recent_signals.error_count_24h,
+  }
+
+  const warnings: string[] = []
+  if (status.validation.status !== 'PASS') warnings.push(status.validation.summary)
+  if (status.git.status !== 'PASS') warnings.push(status.git.working_tree.summary)
+
+  const payload = {
+    generated_at: generatedAt,
+    workspace_id: workspaceId,
+    hub_status: status.hub_status,
+    summary,
+  }
+
+  const serialized = JSON.stringify(payload)
+  const digestHash = createHash('sha256').update(serialized).digest('hex')
+  const signingKey = getHubStatusSigningKey()
+
+  if (!signingKey) {
+    warnings.push('Hub status snapshot is unsigned because no signing key is configured.')
+    return {
+      generated_at: generatedAt,
+      workspace_id: workspaceId,
+      hub_status: status.hub_status,
+      digest_hash: digestHash,
+      signature_status: 'unsigned',
+      signature: null,
+      summary,
+      warnings,
+    }
+  }
+
+  return {
+    generated_at: generatedAt,
+    workspace_id: workspaceId,
+    hub_status: status.hub_status,
+    digest_hash: digestHash,
+    signature_status: 'signed',
+    signature: createHmac('sha256', signingKey).update(serialized).digest('hex'),
+    summary,
+    warnings,
   }
 }
