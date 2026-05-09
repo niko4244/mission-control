@@ -34,10 +34,57 @@ export type LogLike = {
 export interface DashboardData {
   isLocal: boolean
   systemStats: any
+  hubStatus: {
+    timestamp: number
+    hub_status: 'PASS' | 'WARN' | 'FAIL'
+    git: {
+      status: 'PASS' | 'WARN' | 'FAIL'
+      branch: string | null
+      commit: string | null
+      working_tree: {
+        status: 'PASS' | 'WARN' | 'FAIL'
+        summary: string
+      }
+    }
+    validation: {
+      status: 'PASS' | 'WARN' | 'FAIL'
+      summary: string
+    }
+    heartbeat_summary: {
+      status: 'PASS' | 'WARN' | 'FAIL'
+      total_agents: number
+      active_agents: number
+      busy_agents: number
+      stale_agents: number
+      error_agents: number
+      recent_heartbeat_count: number
+      summary: string
+    }
+    task_queue_summary: {
+      status: 'PASS' | 'WARN' | 'FAIL'
+      queued_tasks: number
+      in_progress_tasks: number
+      review_tasks: number
+      failed_tasks: number
+      summary: string
+    }
+    recent_signals: {
+      status: 'PASS' | 'WARN' | 'FAIL'
+      warning_count_24h: number
+      error_count_24h: number
+      summary: string
+    }
+    runtime: {
+      status: 'PASS' | 'WARN' | 'FAIL'
+      uptime_seconds: number
+      last_started_at: string
+      summary: string
+    }
+  } | null
   dbStats: DbStats | null
   claudeStats: ClaudeStats | null
   githubStats: any
-  loading: { system: boolean; sessions: boolean; claude: boolean; github: boolean }
+  loading: { system: boolean; hub: boolean; sessions: boolean; claude: boolean; github: boolean }
   sessions: any[]
   logs: any[]
   agents: any[]
@@ -76,6 +123,7 @@ export interface DashboardData {
   gatewayHealthStatus: 'good' | 'bad'
   // Loading states
   isSystemLoading: boolean
+  isHubLoading: boolean
   isSessionsLoading: boolean
   isClaudeLoading: boolean
   isGithubLoading: boolean
