@@ -3,6 +3,7 @@ import { getDatabase, Notification, db_helpers } from '@/lib/db';
 import { runOpenClaw } from '@/lib/command';
 import { requireRole } from '@/lib/auth';
 import { logger } from '@/lib/logger';
+import { requireWorkspaceId } from '@/lib/enforcement/workspace-scope'
 
 /**
  * POST /api/notifications/deliver - Notification delivery daemon endpoint
@@ -17,7 +18,9 @@ export async function POST(request: NextRequest) {
   try {
     const db = getDatabase();
     const body = await request.json();
-    const workspaceId = auth.user.workspace_id ?? 1;
+    const wsResult = requireWorkspaceId(auth.user)
+    if (!('workspaceId' in wsResult)) return wsResult.response
+    const { workspaceId } = wsResult
     const {
       agent_filter, // Optional: only deliver to specific agent
       limit = 50,   // Max notifications to process per call
@@ -200,7 +203,9 @@ export async function GET(request: NextRequest) {
   try {
     const db = getDatabase();
     const { searchParams } = new URL(request.url);
-    const workspaceId = auth.user.workspace_id ?? 1;
+    const wsResult = requireWorkspaceId(auth.user)
+    if (!('workspaceId' in wsResult)) return wsResult.response
+    const { workspaceId } = wsResult
     const agent = searchParams.get('agent');
     
     // Get delivery statistics
