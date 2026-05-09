@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getDatabase } from '@/lib/db'
 import { requireRole } from '@/lib/auth'
 import { logger } from '@/lib/logger'
+import { requireWorkspaceId } from '@/lib/enforcement/workspace-scope'
 
 /**
  * GET /api/webhooks/deliveries - Get delivery history for a webhook
@@ -12,7 +13,9 @@ export async function GET(request: NextRequest) {
 
   try {
     const db = getDatabase()
-    const workspaceId = auth.user.workspace_id ?? 1
+    const wsResult = requireWorkspaceId(auth.user)
+    if (!('workspaceId' in wsResult)) return wsResult.response
+    const { workspaceId } = wsResult
     const { searchParams } = new URL(request.url)
     const webhookId = searchParams.get('webhook_id')
     const limit = Math.min(parseInt(searchParams.get('limit') || '50'), 200)

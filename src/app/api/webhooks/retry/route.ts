@@ -3,6 +3,7 @@ import { getDatabase } from '@/lib/db'
 import { requireRole } from '@/lib/auth'
 import { deliverWebhookPublic } from '@/lib/webhooks'
 import { logger } from '@/lib/logger'
+import { requireWorkspaceId } from '@/lib/enforcement/workspace-scope'
 
 /**
  * POST /api/webhooks/retry - Manually retry a failed delivery
@@ -13,7 +14,9 @@ export async function POST(request: NextRequest) {
 
   try {
     const db = getDatabase()
-    const workspaceId = auth.user.workspace_id ?? 1
+    const wsResult = requireWorkspaceId(auth.user)
+    if (!('workspaceId' in wsResult)) return wsResult.response
+    const { workspaceId } = wsResult
     const { delivery_id } = await request.json()
 
     if (!delivery_id) {
