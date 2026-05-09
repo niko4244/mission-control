@@ -40,12 +40,14 @@ export function Dashboard() {
     : null
 
   const [systemStats, setSystemStats] = useState<any>(null)
+  const [hubStatus, setHubStatus] = useState<any>(null)
   const [dbStats, setDbStats] = useState<DbStats | null>(null)
   const [claudeStats, setClaudeStats] = useState<ClaudeStats | null>(null)
   const [githubStats, setGithubStats] = useState<any>(null)
   const [hermesCronJobCount, setHermesCronJobCount] = useState(0)
   const [loading, setLoading] = useState({
     system: true,
+    hub: true,
     sessions: true,
     claude: true,
     github: true,
@@ -66,6 +68,19 @@ export function Dashboard() {
         })
         .catch(() => {})
         .finally(() => setLoading(prev => ({ ...prev, system: false })))
+    )
+
+    requests.push(
+      fetch('/api/hub/status')
+        .then(async (res) => {
+          if (!res.ok) return
+          const data = await res.json()
+          if (data && !data.error) {
+            setHubStatus(data)
+          }
+        })
+        .catch(() => {})
+        .finally(() => setLoading(prev => ({ ...prev, hub: false })))
     )
 
     requests.push(
@@ -122,6 +137,7 @@ export function Dashboard() {
 
   // Computed values
   const isSystemLoading = loading.system && !systemStats
+  const isHubLoading = loading.hub && !hubStatus
   const isSessionsLoading = loading.sessions && sessions.length === 0
   const isClaudeLoading = isLocal && loading.claude && !claudeStats
   const isGithubLoading = isLocal && loading.github && !githubStats
@@ -214,6 +230,7 @@ export function Dashboard() {
   const dashboardData: DashboardData = {
     isLocal,
     systemStats,
+    hubStatus,
     dbStats,
     claudeStats,
     githubStats,
@@ -253,6 +270,7 @@ export function Dashboard() {
     mcHealth,
     gatewayHealthStatus,
     isSystemLoading,
+    isHubLoading,
     isSessionsLoading,
     isClaudeLoading,
     isGithubLoading,

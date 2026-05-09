@@ -21,6 +21,7 @@ import { ActivityTimelineWidget } from './widgets/activity-timeline-widget'
 import { FleetStatusWidget } from './widgets/fleet-status-widget'
 import { TaskPipelineWidget } from './widgets/task-pipeline-widget'
 import { SystemHealthWidget } from './widgets/system-health-widget'
+import { RemoteHubStatusWidget } from './widgets/remote-hub-status-widget'
 
 const WIDGET_COMPONENTS: Record<string, React.ComponentType<{ data: DashboardData }>> = {
   'briefing-bar': BriefingBarWidget,
@@ -28,6 +29,7 @@ const WIDGET_COMPONENTS: Record<string, React.ComponentType<{ data: DashboardDat
   'fleet-status': FleetStatusWidget,
   'task-pipeline': TaskPipelineWidget,
   'system-health': SystemHealthWidget,
+  'remote-hub-status': RemoteHubStatusWidget,
   'metric-cards': MetricCardsWidget,
   'runtime-health': RuntimeHealthWidget,
   'gateway-health': GatewayHealthWidget,

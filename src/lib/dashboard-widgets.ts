@@ -55,6 +55,15 @@ export const WIDGET_CATALOG: DashboardWidget[] = [
     component: 'SystemHealthWidget',
   },
   {
+    id: 'remote-hub-status',
+    label: 'Remote Hub Status',
+    description: 'Read-only remote-safe health, queue, heartbeat, and git visibility',
+    category: 'health',
+    modes: ['local', 'full'],
+    defaultSize: 'md',
+    component: 'RemoteHubStatusWidget',
+  },
+  {
     id: 'metric-cards',
     label: 'Key Metrics (Classic)',
     description: 'Top-line stats — sessions, load, tokens, cost',
@@ -152,6 +161,7 @@ export const LOCAL_DEFAULT_LAYOUT = [
   'fleet-status',
   'task-pipeline',
   'system-health',
+  'remote-hub-status',
   'quick-actions',
 ]
 
@@ -161,6 +171,7 @@ export const GATEWAY_DEFAULT_LAYOUT = [
   'fleet-status',
   'task-pipeline',
   'system-health',
+  'remote-hub-status',
   'quick-actions',
 ]
 
