@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireRole } from '@/lib/auth'
 import { requireWorkspaceId } from '@/lib/enforcement/workspace-scope'
 import { collectRemoteHubStatus } from '@/lib/hub-status'
+import { checkHubStatusRateLimit } from '@/lib/hub-status-rate-limit'
 import { logger } from '@/lib/logger'
 
 export async function GET(request: NextRequest) {
@@ -10,6 +11,9 @@ export async function GET(request: NextRequest) {
 
   const wsResult = requireWorkspaceId(auth.user)
   if (!('workspaceId' in wsResult)) return wsResult.response
+
+  const rateLimited = checkHubStatusRateLimit(request, auth.user, wsResult.workspaceId)
+  if (rateLimited) return rateLimited
 
   try {
     return NextResponse.json(collectRemoteHubStatus(wsResult.workspaceId))

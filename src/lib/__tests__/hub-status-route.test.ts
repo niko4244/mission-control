@@ -4,9 +4,14 @@ import { NextRequest } from 'next/server'
 const requireRoleMock = vi.fn()
 const prepareMock = vi.fn()
 const runMock = vi.fn()
+const getClientIpMock = vi.fn(() => '127.0.0.1')
 
 vi.mock('@/lib/auth', () => ({
   requireRole: requireRoleMock,
+}))
+
+vi.mock('@/lib/request', () => ({
+  extractClientIpFromTrusted: getClientIpMock,
 }))
 
 vi.mock('@/lib/db', () => ({
@@ -131,5 +136,36 @@ describe('hub status route', () => {
     expect(encoded).not.toContain('secret')
     expect(encoded).not.toContain('cookie')
     expect(runMock).not.toHaveBeenCalled()
+  })
+
+  it('allows requests under the hub status rate limit', async () => {
+    requireRoleMock.mockReturnValue({
+      user: { id: 7, username: 'viewer', role: 'viewer', workspace_id: 7, tenant_id: 1 },
+    })
+
+    const { GET } = await import('@/app/api/hub/status/route')
+
+    for (let i = 0; i < 30; i++) {
+      const response = await GET(new NextRequest(`http://localhost/api/hub/status?workspace_id=${900 + i}`))
+      expect(response.status).toBe(200)
+    }
+  })
+
+  it('blocks requests over the hub status rate limit', async () => {
+    requireRoleMock.mockReturnValue({
+      user: { id: 7, username: 'viewer', role: 'viewer', workspace_id: 7, tenant_id: 1 },
+    })
+
+    const { GET } = await import('@/app/api/hub/status/route')
+
+    for (let i = 0; i < 30; i++) {
+      await GET(new NextRequest(`http://localhost/api/hub/status?workspace_id=${1000 + i}`))
+    }
+
+    const blocked = await GET(new NextRequest('http://localhost/api/hub/status?workspace_id=99999'))
+    expect(blocked.status).toBe(429)
+    await expect(blocked.json()).resolves.toEqual({
+      error: 'Remote hub status rate limit exceeded. Please try again later.',
+    })
   })
 })
