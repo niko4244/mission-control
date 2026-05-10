@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireRole } from '@/lib/auth'
+import { requireWorkspaceId } from '@/lib/enforcement/workspace-scope'
 import { createRun, listRuns } from '@/lib/runs'
 import { logger } from '@/lib/logger'
 
@@ -13,7 +14,9 @@ export async function GET(request: NextRequest) {
 
   try {
     const { searchParams } = new URL(request.url)
-    const workspaceId = auth.user.workspace_id ?? 1
+    const wsResult = requireWorkspaceId(auth.user)
+    if (!('workspaceId' in wsResult)) return wsResult.response
+    const { workspaceId } = wsResult
 
     const result = listRuns({
       workspaceId,
@@ -43,8 +46,11 @@ export async function POST(request: NextRequest) {
   if ('error' in auth) return NextResponse.json({ error: auth.error }, { status: auth.status })
 
   try {
+    const wsResult = requireWorkspaceId(auth.user)
+    if (!('workspaceId' in wsResult)) return wsResult.response
+
     const body = await request.json()
-    const workspaceId = auth.user.workspace_id ?? 1
+    const { workspaceId } = wsResult
 
     if (!body.agent_id || !body.status || !body.started_at) {
       return NextResponse.json(
