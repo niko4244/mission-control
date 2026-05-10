@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireRole } from '@/lib/auth'
 import { getDatabase } from '@/lib/db'
+import { requireWorkspaceId } from '@/lib/enforcement/workspace-scope'
 import { getDetectedGatewayPort, getDetectedGatewayToken } from '@/lib/gateway-runtime'
 
 interface GatewayEntry {
@@ -75,10 +76,13 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   const auth = requireRole(request, 'admin')
   if ('error' in auth) return NextResponse.json({ error: auth.error }, { status: auth.status })
+  const wsResult = requireWorkspaceId(auth.user)
+  if (!('workspaceId' in wsResult)) return wsResult.response
 
   const db = getDatabase()
   ensureTable(db)
   const body = await request.json()
+  const { workspaceId } = wsResult
 
   const { name, host, port, token, is_primary, agents } = body
 
@@ -99,7 +103,6 @@ export async function POST(request: NextRequest) {
     // Auto-register agents reported by the gateway (k8s sidecar support)
     let agentsRegistered = 0
     if (Array.isArray(agents) && agents.length > 0) {
-      const workspaceId = auth.user?.workspace_id ?? 1
       const now = Math.floor(Date.now() / 1000)
       const upsertAgent = db.prepare(`
         INSERT INTO agents (name, role, status, last_seen, source, workspace_id, updated_at)
@@ -141,10 +144,13 @@ export async function POST(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   const auth = requireRole(request, 'admin')
   if ('error' in auth) return NextResponse.json({ error: auth.error }, { status: auth.status })
+  const wsResult = requireWorkspaceId(auth.user)
+  if (!('workspaceId' in wsResult)) return wsResult.response
 
   const db = getDatabase()
   ensureTable(db)
   const body = await request.json()
+  const { workspaceId } = wsResult
   const { id, ...updates } = body
 
   if (!id) return NextResponse.json({ error: 'id is required' }, { status: 400 })
@@ -179,7 +185,6 @@ export async function PUT(request: NextRequest) {
   // Auto-register agents reported by the gateway (k8s sidecar support)
   let agentsRegistered = 0
   if (Array.isArray(updates.agents) && updates.agents.length > 0) {
-    const workspaceId = auth.user?.workspace_id ?? 1
     const now = Math.floor(Date.now() / 1000)
     const upsertAgent = db.prepare(`
       INSERT INTO agents (name, role, status, last_seen, source, workspace_id, updated_at)
