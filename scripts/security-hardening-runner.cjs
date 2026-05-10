@@ -10,7 +10,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
-const AGENT = 'Security Hardening Runner v1';
+const AGENT = 'Security Hardening Runner v1.1';
 const LABEL = 'OBSERVE ONLY';
 const DEFAULT_SCAN_ROOT = 'src/app/api';
 const VALID_MODES = new Set(['audit', 'verify']);
@@ -36,6 +36,24 @@ const ROUTE_FILE_RE = /(^|\/)route\.(t|j)sx?$/i;
 const TEST_FILE_RE = /(^|\/)(__tests__\/.*|.*\.(test|spec)\.(t|j)sx?)$/i;
 const LOCKFILE_NAMES = new Set(['package-lock.json', 'pnpm-lock.yaml', 'yarn.lock']);
 const PACKAGE_FILES = new Set(['package.json', 'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock']);
+const CI_GUARD_THRESHOLD = 25;
+const KNOWN_ROUTE_FAMILIES = new Set([
+  'gateways',
+  'tokens',
+  'webhooks',
+  'notifications',
+  'workflows',
+  'pipelines',
+  'projects',
+  'agents',
+  'memory',
+  'requests',
+  'chat',
+  'status',
+  'search',
+  'standup',
+  'auth',
+]);
 
 function normalizePath(filePath) {
   return String(filePath || '').replace(/\\/g, '/');
@@ -166,9 +184,11 @@ function getRouteFamily(filePath) {
   const parts = relative.split('/').filter(Boolean);
   const trimmed = parts.slice(0, -1).filter((part) => !part.startsWith('['));
 
-  if (trimmed.length === 0) return 'root';
+  if (trimmed.length === 0) return 'unknown';
   if (trimmed[0] === 'v1' && trimmed[1]) return `v1/${trimmed[1]}`;
-  return trimmed[0];
+  if (KNOWN_ROUTE_FAMILIES.has(trimmed[0])) return trimmed[0];
+  if (trimmed[0] === 'local' && trimmed[1] && KNOWN_ROUTE_FAMILIES.has(trimmed[1])) return trimmed[1];
+  return 'unknown';
 }
 
 function getDomainName(filePath) {
@@ -177,11 +197,23 @@ function getDomainName(filePath) {
   return parts[parts.length - 1];
 }
 
+function getMethodSummary(methods) {
+  const uniqueMethods = unique(Array.isArray(methods) ? methods : []);
+  return uniqueMethods.length > 0 ? uniqueMethods : ['UNKNOWN'];
+}
+
 function riskFromLabel(label) {
   if (label === 'Critical') return 3;
   if (label === 'High') return 2;
   if (label === 'Medium') return 1;
   return 0;
+}
+
+function labelFromRiskLevel(level) {
+  if (level >= 3) return 'Critical';
+  if (level === 2) return 'High';
+  if (level === 1) return 'Medium';
+  return 'Low';
 }
 
 function classifyRouteRisk(filePath, methods = [], matches = []) {
@@ -306,6 +338,454 @@ function scanFiles(rootDir, scanRoot = DEFAULT_SCAN_ROOT) {
   };
 }
 
+function summarizeRiskBuckets(routeFindings) {
+  const summary = {
+    Critical: 0,
+    High: 0,
+    Medium: 0,
+    Low: 0,
+  };
+
+  for (const finding of routeFindings) {
+    const label = finding.risk || 'Low';
+    if (!(label in summary)) summary.Low += 1;
+    else summary[label] += 1;
+  }
+
+  return summary;
+}
+
+function safeJsonClone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function assessBatchCandidate(findings) {
+  const routeFiles = unique(findings.map((finding) => finding.file));
+  const families = unique(findings.map((finding) => finding.family));
+  const reasons = unique(findings.map((finding) => finding.risk_reason));
+  const methods = unique(findings.flatMap((finding) => getMethodSummary(finding.methods)));
+  const fallbackCount = findings.reduce((total, finding) => total + (finding.fallback_count || 0), 0);
+  const riskLevel = Math.max(0, ...findings.map((finding) => finding.risk_level || 0));
+  const risk = labelFromRiskLevel(riskLevel);
+  const lineCount = findings.reduce((total, finding) => total + (finding.line_count || 0), 0);
+  const family = families[0] || 'unknown';
+
+  if (families.length !== 1) {
+    return {
+      family,
+      risk,
+      route_files: routeFiles,
+      fallback_to_one_findings: fallbackCount,
+      method_summary: methods,
+      safe_to_batch: false,
+      why: 'Files span unrelated route families, so batching would blur review boundaries.',
+    };
+  }
+
+  if (routeFiles.length < 2) {
+    return {
+      family,
+      risk,
+      route_files: routeFiles,
+      fallback_to_one_findings: fallbackCount,
+      method_summary: methods,
+      safe_to_batch: false,
+      why: 'Only one fallback route remains in this family, so batching adds no value.',
+    };
+  }
+
+  if (/(gateway|terminal|control)/.test(family)) {
+    return {
+      family,
+      risk,
+      route_files: routeFiles,
+      fallback_to_one_findings: fallbackCount,
+      method_summary: methods,
+      safe_to_batch: false,
+      why: 'Gateway/control-adjacent routes stay safer as single-route reviews.',
+    };
+  }
+
+  if ((/token/.test(family) || /key/.test(family)) && (routeFiles.length > 2 || lineCount > 350)) {
+    return {
+      family,
+      risk,
+      route_files: routeFiles,
+      fallback_to_one_findings: fallbackCount,
+      method_summary: methods,
+      safe_to_batch: false,
+      why: 'Credential/token routes are too broad here for a reviewable grouped PR.',
+    };
+  }
+
+  if (risk === 'Critical' && routeFiles.length > 2) {
+    return {
+      family,
+      risk,
+      route_files: routeFiles,
+      fallback_to_one_findings: fallbackCount,
+      method_summary: methods,
+      safe_to_batch: false,
+      why: 'Critical route families should stay at one route unless at most two tightly coupled files remain.',
+    };
+  }
+
+  if (risk === 'High' && routeFiles.length > 5) {
+    return {
+      family,
+      risk,
+      route_files: routeFiles,
+      fallback_to_one_findings: fallbackCount,
+      method_summary: methods,
+      safe_to_batch: false,
+      why: 'This High-risk family is too large for a modest reviewable batch.',
+    };
+  }
+
+  if ((risk === 'Medium' || risk === 'Low') && routeFiles.length > 8) {
+    return {
+      family,
+      risk,
+      route_files: routeFiles,
+      fallback_to_one_findings: fallbackCount,
+      method_summary: methods,
+      safe_to_batch: false,
+      why: 'This family is too large for a mechanical batch without extra review risk.',
+    };
+  }
+
+  if (reasons.length > 1 && risk === 'Critical') {
+    return {
+      family,
+      risk,
+      route_files: routeFiles,
+      fallback_to_one_findings: fallbackCount,
+      method_summary: methods,
+      safe_to_batch: false,
+      why: 'The remaining Critical files have different behavior patterns, so keep them separate.',
+    };
+  }
+
+  if (lineCount > 280) {
+    return {
+      family,
+      risk,
+      route_files: routeFiles,
+      fallback_to_one_findings: fallbackCount,
+      method_summary: methods,
+      safe_to_batch: false,
+      why: 'The expected grouped diff is larger than a small reviewable hardening PR.',
+    };
+  }
+
+  return {
+    family,
+    risk,
+    route_files: routeFiles,
+    fallback_to_one_findings: fallbackCount,
+    method_summary: methods,
+    safe_to_batch: true,
+    why: 'The files stay in one route family, share the same workspace-hardening pattern, and should remain reviewable as one PR.',
+  };
+}
+
+function buildFamilySummary(scanResults) {
+  const fallbackRouteFindings = (scanResults.route_findings || []).filter((finding) => finding.fallback_count > 0);
+  const grouped = new Map();
+
+  for (const finding of fallbackRouteFindings) {
+    const family = finding.family || 'unknown';
+    if (!grouped.has(family)) grouped.set(family, []);
+    grouped.get(family).push(finding);
+  }
+
+  const summaries = [];
+  for (const [family, findings] of grouped.entries()) {
+    const batchAssessment = assessBatchCandidate(findings);
+    const riskLevel = Math.max(0, ...findings.map((finding) => finding.risk_level || 0));
+    const routeFiles = unique(findings.map((finding) => finding.file));
+    const methodSummary = unique(findings.flatMap((finding) => getMethodSummary(finding.methods)));
+
+    summaries.push({
+      family,
+      risk: labelFromRiskLevel(riskLevel),
+      route_files: routeFiles,
+      fallback_to_one_findings: findings.reduce((total, finding) => total + (finding.fallback_count || 0), 0),
+      method_summary: methodSummary,
+      route_count: routeFiles.length,
+      max_line_count: Math.max(...findings.map((finding) => finding.line_count || 0)),
+      safe_to_batch: batchAssessment.safe_to_batch,
+      why: batchAssessment.why,
+      findings,
+    });
+  }
+
+  summaries.sort((left, right) => (
+    riskFromLabel(right.risk) - riskFromLabel(left.risk)
+      || right.fallback_to_one_findings - left.fallback_to_one_findings
+      || left.route_count - right.route_count
+      || left.family.localeCompare(right.family)
+  ));
+
+  return summaries;
+}
+
+function topFamiliesByFallback(familySummary) {
+  return familySummary
+    .map((summary) => ({
+      family: summary.family,
+      risk: summary.risk,
+      fallback_to_one_findings: summary.fallback_to_one_findings,
+      route_count: summary.route_count,
+    }))
+    .sort((left, right) => (
+      right.fallback_to_one_findings - left.fallback_to_one_findings
+        || riskFromLabel(right.risk) - riskFromLabel(left.risk)
+        || left.family.localeCompare(right.family)
+    ))
+    .slice(0, 5);
+}
+
+function topFamiliesByRisk(familySummary) {
+  return familySummary
+    .map((summary) => ({
+      family: summary.family,
+      risk: summary.risk,
+      fallback_to_one_findings: summary.fallback_to_one_findings,
+      route_count: summary.route_count,
+    }))
+    .sort((left, right) => (
+      riskFromLabel(right.risk) - riskFromLabel(left.risk)
+        || right.fallback_to_one_findings - left.fallback_to_one_findings
+        || left.family.localeCompare(right.family)
+    ))
+    .slice(0, 5);
+}
+
+function buildBatchCandidate(summary) {
+  const scopeFiles = safeJsonClone(summary.route_files);
+  const branch = `harden-${slugify(summary.family)}-workspace-routes`;
+  const title = `Harden ${humanizeFamily(summary.family)} workspace routes`;
+  const excluded = [];
+
+  return {
+    title,
+    branch,
+    family: summary.family,
+    risk: summary.risk,
+    scope_files: scopeFiles,
+    excluded,
+    safe_to_batch: summary.safe_to_batch,
+    why_next: summary.why,
+    method_summary: summary.method_summary,
+    implementation_prompt: generateImplementationPrompt({
+      title,
+      branch,
+      risk: summary.risk,
+      scope_files: scopeFiles,
+      why_next: summary.why,
+      excluded,
+    }, {
+      strategy: 'route_family_batch',
+      family: summary.family,
+      routeFiles: scopeFiles,
+      focusedTests: scopeFiles.flatMap((file) => inferFocusedTestCandidates(file)),
+      excludedFiles: excluded,
+    }),
+  };
+}
+
+function chooseSingleRouteRecommendation(scanResults) {
+  const candidates = (scanResults.route_findings || []).filter((finding) => finding.fallback_count > 0);
+
+  if (candidates.length === 0) {
+    return {
+      title: 'No remaining fallback-to-1 route hardening target detected',
+      branch: '',
+      risk: 'Low',
+      scope_files: [],
+      why_next: 'Audit scan did not find any remaining fallback-to-1 route file under src/app/api.',
+      excluded: [],
+      implementation_prompt: 'No implementation prompt generated because no fallback-to-1 route target was detected.',
+    };
+  }
+
+  const chosen = candidates[0];
+  const branch = `harden-${slugify(chosen.family)}-workspace-route`;
+  const title = `Harden ${humanizeFamily(chosen.family)} workspace route`;
+  const focusedTests = inferFocusedTestCandidates(chosen.file);
+  const excluded = candidates
+    .slice(1, 4)
+    .map((candidate) => `Excluded ${candidate.file}: keep this PR narrower than the separate ${candidate.family} ${candidate.risk} surface.`);
+
+  const whyNext =
+    `${chosen.file} is a ${chosen.risk} ${chosen.risk_reason} with ${chosen.fallback_count} ` +
+    `fallback-to-1 hit(s) in only ${chosen.line_count} line(s), which makes it the smallest safe next PR ` +
+    'without broadening into unrelated route families.';
+
+  const recommendation = {
+    title,
+    branch,
+    risk: chosen.risk,
+    scope_files: [chosen.file],
+    why_next: whyNext,
+    excluded,
+    implementation_prompt: '',
+  };
+
+  recommendation.implementation_prompt = generateImplementationPrompt(recommendation, {
+    strategy: 'single_route',
+    routeFile: chosen.file,
+    routeFiles: [chosen.file],
+    focusedTests,
+  });
+
+  return recommendation;
+}
+
+function determineNextStrategy(scanResults, familySummary, batchCandidates, recommendation) {
+  const fallbackRouteFindings = (scanResults.route_findings || []).filter((finding) => finding.fallback_count > 0);
+  const criticalFamilies = familySummary.filter((summary) => summary.risk === 'Critical');
+  const safeCriticalBatch = batchCandidates.find((candidate) => candidate.risk === 'Critical');
+  const safeNonCriticalBatch = batchCandidates.find((candidate) => candidate.risk !== 'Critical');
+
+  if (fallbackRouteFindings.length === 0) {
+    if (scanResults.total_findings > 0) {
+      return {
+        next_strategy: 'tooling_or_ci',
+        why: 'Direct fallback-to-1 routes are gone; the remaining scan hits are mostly general workspace references, so CI/tooling is the better next investment.',
+        single_route_remaining_is_worth_it: false,
+      };
+    }
+
+    return {
+      next_strategy: 'hold/manual_review',
+      why: 'No remaining fallback-to-1 routes were found, so pause route hardening and review whether any manual follow-up is still needed.',
+      single_route_remaining_is_worth_it: false,
+    };
+  }
+
+  if (criticalFamilies.length > 0) {
+    if (safeCriticalBatch && safeCriticalBatch.scope_files.length <= 2) {
+      return {
+        next_strategy: 'route_family_batch',
+        why: `The remaining Critical files in ${safeCriticalBatch.family} are tightly coupled enough to batch safely without losing reviewability.`,
+        single_route_remaining_is_worth_it: false,
+      };
+    }
+
+    return {
+      next_strategy: 'single_route',
+      why: `Critical execution/credential/control routes still remain, so continue with the smallest safe route-first PR: ${recommendation.scope_files[0] || 'the top candidate route'}.`,
+      single_route_remaining_is_worth_it: true,
+    };
+  }
+
+  if (safeNonCriticalBatch) {
+    return {
+      next_strategy: 'route_family_batch',
+      why: `No Critical fallback route blocks the queue, and ${safeNonCriticalBatch.family} has a modest same-family batch that should be more efficient than one-route-at-a-time hardening.`,
+      single_route_remaining_is_worth_it: false,
+    };
+  }
+
+  if (scanResults.fallback_to_one_findings <= CI_GUARD_THRESHOLD && scanResults.total_findings > scanResults.fallback_to_one_findings) {
+    return {
+      next_strategy: 'tooling_or_ci',
+      why: 'The remaining direct fallbacks are low enough that preventing regressions with tooling/CI now gives better leverage than more tiny route PRs.',
+      single_route_remaining_is_worth_it: false,
+    };
+  }
+
+  return {
+    next_strategy: 'hold/manual_review',
+    why: 'The remaining findings do not form a clearly safe batch and are not strong enough for more one-route busywork without a human review pass.',
+    single_route_remaining_is_worth_it: false,
+  };
+}
+
+function buildCiGuardRecommendation(scanResults, strategy) {
+  const fallbackCount = scanResults.fallback_to_one_findings || 0;
+  const recommended = fallbackCount > 0 && fallbackCount <= CI_GUARD_THRESHOLD;
+
+  if (recommended) {
+    return {
+      recommended: true,
+      why: `Direct fallback-to-1 hits are down to ${fallbackCount}, so the next leverage point is a CI guard that blocks new workspace_id ?? 1 / workspaceId ?? 1 patterns in src/app/api route files.`,
+    };
+  }
+
+  if (strategy === 'tooling_or_ci') {
+    return {
+      recommended: true,
+      why: 'The remaining work is mostly policy/mechanical, so plan a CI guard next even though route cleanup is not fully complete yet.',
+    };
+  }
+
+  return {
+    recommended: false,
+    why: `Wait until direct fallback-to-1 hits drop closer to ${CI_GUARD_THRESHOLD} before adding a blocking CI guard.`,
+  };
+}
+
+function buildBatchPlanner(scanResults, recommendation) {
+  const fallbackRouteFindings = (scanResults.route_findings || []).filter((finding) => finding.fallback_count > 0);
+  const familySummary = buildFamilySummary(scanResults);
+  const batchCandidates = familySummary
+    .filter((summary) => summary.safe_to_batch)
+    .map(buildBatchCandidate)
+    .sort((left, right) => (
+      riskFromLabel(right.risk) - riskFromLabel(left.risk)
+        || right.scope_files.length - left.scope_files.length
+        || right.family.localeCompare(left.family)
+    ));
+  const strategy = determineNextStrategy(scanResults, familySummary, batchCandidates, recommendation);
+  const ciGuardRecommendation = buildCiGuardRecommendation(scanResults, strategy.next_strategy);
+  const strategyRecommendation = strategy.next_strategy === 'route_family_batch' && batchCandidates[0]
+    ? {
+        next_strategy: strategy.next_strategy,
+        title: batchCandidates[0].title,
+        branch: batchCandidates[0].branch,
+        scope_files: batchCandidates[0].scope_files,
+        why: strategy.why,
+      }
+    : {
+        next_strategy: strategy.next_strategy,
+        title: recommendation.title,
+        branch: recommendation.branch,
+        scope_files: recommendation.scope_files,
+        why: strategy.why,
+      };
+
+  return {
+    enabled: true,
+    next_strategy: strategy.next_strategy,
+    why: strategy.why,
+    single_route_remaining_is_worth_it: strategy.single_route_remaining_is_worth_it,
+    totals: {
+      total_findings: scanResults.total_findings,
+      total_fallback_to_one_findings: scanResults.fallback_to_one_findings,
+      route_files_with_fallback_to_one: fallbackRouteFindings.length,
+      route_families_affected: familySummary.length,
+      top_route_families_by_fallback: topFamiliesByFallback(familySummary),
+      top_route_families_by_risk: topFamiliesByRisk(familySummary),
+    },
+    risk_summary: summarizeRiskBuckets(fallbackRouteFindings),
+    family_summary: familySummary.map((summary) => ({
+      family: summary.family,
+      risk: summary.risk,
+      route_files: summary.route_files,
+      fallback_to_one_findings: summary.fallback_to_one_findings,
+      safe_to_batch: summary.safe_to_batch,
+      why: summary.why,
+      method_summary: summary.method_summary,
+    })),
+    batch_candidates: batchCandidates,
+    strategy_recommendation: strategyRecommendation,
+    ci_guard_recommendation: ciGuardRecommendation,
+  };
+}
+
 function parseGitStatus(statusText) {
   const lines = splitLines(statusText).filter(Boolean);
   const entries = lines.map((line) => {
@@ -422,70 +902,38 @@ function inferFocusedTestCandidates(routeFile) {
 }
 
 function chooseNextRecommendation(scanResults) {
-  const candidates = (scanResults.route_findings || []).filter((finding) => finding.fallback_count > 0);
-
-  if (candidates.length === 0) {
-    return {
-      title: 'No remaining fallback-to-1 route hardening target detected',
-      branch: '',
-      risk: 'Low',
-      scope_files: [],
-      why_next: 'Audit scan did not find any remaining fallback-to-1 route file under src/app/api.',
-      excluded: [],
-      implementation_prompt: 'No implementation prompt generated because no fallback-to-1 route target was detected.',
-    };
-  }
-
-  const chosen = candidates[0];
-  const branch = `harden-${slugify(chosen.family)}-workspace-route`;
-  const title = `Harden ${humanizeFamily(chosen.family)} workspace route`;
-  const focusedTests = inferFocusedTestCandidates(chosen.file);
-  const excluded = candidates
-    .slice(1, 4)
-    .map((candidate) => `Excluded ${candidate.file}: keep this PR narrower than the separate ${candidate.family} ${candidate.risk} surface.`);
-
-  const whyNext =
-    `${chosen.file} is a ${chosen.risk} ${chosen.risk_reason} with ${chosen.fallback_count} ` +
-    `fallback-to-1 hit(s) in only ${chosen.line_count} line(s), which makes it the smallest safe next PR ` +
-    'without broadening into unrelated route families.';
-
-  const recommendation = {
-    title,
-    branch,
-    risk: chosen.risk,
-    scope_files: [chosen.file],
-    why_next: whyNext,
-    excluded,
-    implementation_prompt: '',
-  };
-
-  recommendation.implementation_prompt = generateImplementationPrompt(recommendation, {
-    routeFile: chosen.file,
-    focusedTests,
-  });
-
-  return recommendation;
+  return chooseSingleRouteRecommendation(scanResults);
 }
 
 function generateImplementationPrompt(recommendation, context = {}) {
-  const routeFile = context.routeFile || recommendation.scope_files[0] || 'src/app/api/.../route.ts';
+  const strategy = context.strategy || 'single_route';
+  const routeFiles = Array.isArray(context.routeFiles) && context.routeFiles.length > 0
+    ? unique(context.routeFiles)
+    : unique(recommendation.scope_files || []);
+  const routeFile = context.routeFile || routeFiles[0] || 'src/app/api/.../route.ts';
   const focusedTests = Array.isArray(context.focusedTests) && context.focusedTests.length > 0
-    ? context.focusedTests
+    ? unique(context.focusedTests)
     : ['src/lib/__tests__/route-security.test.ts'];
-
-  const searchCommand = `rg -n "workspace_id \\?\\? 1|workspaceId \\?\\? 1|auth\\.user\\.workspace_id|user\\.workspace_id|currentUser\\.workspace_id" ${routeFile} src/lib/__tests__`;
+  const excludedFiles = Array.isArray(context.excludedFiles) ? unique(context.excludedFiles) : [];
+  const searchTargets = routeFiles.length > 0 ? routeFiles.join(' ') : routeFile;
+  const scanCommand = `rg -n "workspace_id \\?\\? 1|workspaceId \\?\\? 1|auth\\.user\\.workspace_id|user\\.workspace_id|currentUser\\.workspace_id" ${searchTargets} src/lib/__tests__`;
+  const fallbackRegressionCommand = `rg -n "workspace_id \\?\\? 1|workspaceId \\?\\? 1" ${searchTargets}`;
   const focusedTestCommand = `pnpm test -- ${focusedTests[0]}`;
 
-  return [
+  const lines = [
     'PROJECT: Mission Control',
     'LOCAL REPO: C:\\Users\\nikma\\mission-control',
     'CANONICAL REPO: https://github.com/niko4244/mission-control',
     '',
     'TASK TYPE:',
-    'Focused workspace-route hardening PR.',
+    strategy === 'route_family_batch'
+      ? 'Focused route-family workspace hardening batch PR.'
+      : 'Focused workspace-route hardening PR.',
     '',
     'GOAL:',
-    `Harden ${routeFile} by removing fallback-to-1 workspace resolution and preserving the smallest safe route-only scope.`,
+    strategy === 'route_family_batch'
+      ? `Harden the ${context.family || 'selected'} route family by removing fallback-to-1 workspace resolution while keeping the batch tightly reviewable.`
+      : `Harden ${routeFile} by removing fallback-to-1 workspace resolution and preserving the smallest safe route-only scope.`,
     '',
     'PRECONDITION:',
     '1. Confirm local main is current:',
@@ -505,77 +953,105 @@ function generateImplementationPrompt(recommendation, context = {}) {
     '',
     'STRICT SCOPE:',
     '- audit first',
-    `- prefer one route file only: ${routeFile}`,
-    '- smallest safe scope only',
-    '- no broad refactor',
-    '- no repo-wide cleanup',
-    '',
-    'FILES TO INSPECT:',
-    `- ${routeFile}`,
-    ...focusedTests.map((file) => `- ${file}`),
-    '',
-    'FILES NOT TO TOUCH:',
-    '- unrelated routes',
-    '- auth helpers unless already required by existing hardening patterns',
-    '- workspace enforcement helpers unless already required by existing hardening patterns',
-    '- package-lock.json',
-    '- pnpm-lock.yaml',
-    '- docs unless absolutely necessary',
-    '',
-    'AUDIT / SEARCH COMMAND:',
-    searchCommand,
-    '',
-    'IMPLEMENTATION REQUIREMENTS:',
-    '- inspect the route first and identify every fallback-to-1 workspace path',
-    '- replace implicit workspace fallback with fail-closed workspace enforcement using existing repo patterns',
-    '- preserve existing route behavior outside the hardening change',
-    '- keep the PR limited to the selected route and one focused security test file',
-    '',
-    'SECURITY REQUIREMENTS:',
-    '- no workspace_id ?? 1',
-    '- no workspaceId ?? 1',
-    '- fail closed when workspace context is missing',
-    '- do not allow cross-workspace access',
-    '- keep existing auth/role checks intact or stricter',
-    '',
-    'TEST REQUIREMENTS:',
-    '- add or update one focused route-security test',
-    '- cover denied unauthenticated access where applicable',
-    '- cover missing workspace context',
-    '- cover workspace-scoped authorized access',
-    '- assert the route source no longer contains fallback-to-1 patterns',
-    '',
-    'VALIDATION COMMANDS:',
-    focusedTestCommand,
-    'pnpm typecheck',
-    'pnpm lint',
-    'pnpm test',
-    'pnpm build',
-    '',
-    'DIFF REVIEW BEFORE COMMIT:',
-    'git status --short',
-    'git diff --stat',
-    'git diff --name-only',
-    `git diff -- ${routeFile} ${focusedTests[0]}`,
-    '',
-    'GIT RULES:',
-    '- do not use git add .',
-    '- only stage exact changed files',
-    '- do not push until approved',
-    '- do not create PR until approved',
-    '',
-    'REQUIRED OUTPUT FORMAT:',
-    'A. Precondition results',
-    'B. Audit findings',
-    'C. Files changed',
-    'D. Security hardening changes',
-    'E. Tests added or updated',
-    'F. Validation results',
-    'G. Diff scope',
-    'H. Exact files recommended to stage',
-    'I. Commit recommendation',
-    'J. PR recommendation',
-  ].join('\n');
+  ];
+
+  if (strategy === 'route_family_batch') {
+    lines.push(`- strict route family only: ${context.family || 'selected family'}`);
+    lines.push(`- exact included route files: ${routeFiles.join(', ')}`);
+    lines.push(`- exact excluded files: ${excludedFiles.length > 0 ? excludedFiles.join(', ') : 'none'}`);
+    lines.push('- route-family batch only; do not broaden into unrelated routes');
+    lines.push('- no helper refactor or architecture cleanup');
+  } else {
+    lines.push(`- prefer one route file only: ${routeFile}`);
+    lines.push('- smallest safe scope only');
+  }
+
+  lines.push('- no broad refactor');
+  lines.push('- no repo-wide cleanup');
+  lines.push('');
+  lines.push('FILES TO INSPECT:');
+  for (const file of routeFiles) lines.push(`- ${file}`);
+  for (const file of focusedTests) lines.push(`- ${file}`);
+  lines.push('');
+  lines.push('FILES NOT TO TOUCH:');
+  lines.push('- unrelated routes');
+  lines.push('- auth helpers unless already required by existing hardening patterns');
+  lines.push('- workspace enforcement helpers unless already required by existing hardening patterns');
+  lines.push('- package-lock.json');
+  lines.push('- pnpm-lock.yaml');
+  lines.push('- docs unless absolutely necessary');
+  lines.push('');
+  lines.push('AUDIT / SEARCH COMMAND:');
+  lines.push(scanCommand);
+  lines.push('');
+  lines.push('IMPLEMENTATION REQUIREMENTS:');
+  lines.push('- inspect every touched route first and identify each fallback-to-1 workspace path');
+  lines.push('- replace implicit workspace fallback with fail-closed workspace enforcement using existing repo patterns');
+  lines.push('- preserve existing route behavior outside the hardening change');
+  if (strategy === 'route_family_batch') {
+    lines.push('- keep the PR limited to the listed family files and avoid opportunistic refactors');
+    lines.push('- use the same workspace-hardening pattern consistently across all touched routes');
+  } else {
+    lines.push('- keep the PR limited to the selected route and one focused security test file');
+  }
+  lines.push('');
+  lines.push('SECURITY REQUIREMENTS:');
+  lines.push('- no workspace_id ?? 1');
+  lines.push('- no workspaceId ?? 1');
+  lines.push('- fail closed when workspace context is missing');
+  lines.push('- do not allow cross-workspace access');
+  lines.push('- keep existing auth/role checks intact or stricter');
+  lines.push('');
+  lines.push('TEST REQUIREMENTS:');
+  if (strategy === 'route_family_batch') {
+    lines.push('- add or update focused tests that cover every touched route file');
+    lines.push('- each touched route must prove unauthenticated denial where applicable');
+    lines.push('- each touched route must prove missing workspace context fails closed');
+    lines.push('- each touched route must prove authorized workspace-scoped behavior still works');
+  } else {
+    lines.push('- add or update one focused route-security test');
+    lines.push('- cover denied unauthenticated access where applicable');
+    lines.push('- cover missing workspace context');
+    lines.push('- cover workspace-scoped authorized access');
+  }
+  lines.push('- assert the route source no longer contains fallback-to-1 patterns');
+  lines.push('');
+  lines.push('VALIDATION COMMANDS:');
+  lines.push(focusedTestCommand);
+  lines.push('pnpm typecheck');
+  lines.push('pnpm lint');
+  lines.push('pnpm test');
+  lines.push('pnpm build');
+  lines.push('node scripts/security-hardening-runner.cjs verify');
+  lines.push('');
+  lines.push('STATIC FALLBACK REGRESSION:');
+  lines.push(fallbackRegressionCommand);
+  lines.push('');
+  lines.push('DIFF REVIEW BEFORE COMMIT:');
+  lines.push('git status --short');
+  lines.push('git diff --stat');
+  lines.push('git diff --name-only');
+  lines.push(`git diff -- ${routeFiles.join(' ')} ${focusedTests[0]}`);
+  lines.push('');
+  lines.push('GIT RULES:');
+  lines.push('- do not use git add .');
+  lines.push('- only stage exact changed files');
+  lines.push('- do not push until approved');
+  lines.push('- do not create PR until approved');
+  lines.push('');
+  lines.push('REQUIRED OUTPUT FORMAT:');
+  lines.push('A. Precondition results');
+  lines.push('B. Audit findings');
+  lines.push('C. Files changed');
+  lines.push('D. Security hardening changes');
+  lines.push('E. Tests added or updated');
+  lines.push('F. Validation results');
+  lines.push('G. Diff scope');
+  lines.push('H. Exact files recommended to stage');
+  lines.push('I. Commit recommendation');
+  lines.push('J. PR recommendation');
+
+  return lines.join('\n');
 }
 
 function classifyChangedFiles(files) {
@@ -831,20 +1307,37 @@ function verifyCurrentBranchState(rootDir, repoState, options = {}) {
   };
 }
 
-function summarizeAudit(repoState, scanResults, recommendation, status) {
-  const topFinding = scanResults.route_findings[0];
+function summarizeAudit(repoState, scanResults, recommendation, batchPlanner, status) {
+  const topFinding = scanResults.route_findings.find((finding) => finding.fallback_count > 0) || scanResults.route_findings[0];
+  const topFamily = batchPlanner.family_summary[0];
+  const recommendedScope = batchPlanner.next_strategy === 'route_family_batch' && batchPlanner.batch_candidates[0]
+    ? `${batchPlanner.batch_candidates[0].title} -> ${batchPlanner.batch_candidates[0].scope_files.join(', ')}`
+    : `${recommendation.title}${recommendation.scope_files[0] ? ` -> ${recommendation.scope_files[0]}` : ''}`;
+  const singleRouteGuidance = batchPlanner.single_route_remaining_is_worth_it
+    ? 'Continue single-route hardening for now.'
+    : batchPlanner.next_strategy === 'route_family_batch'
+      ? 'Stop single-route mode and batch the next related family.'
+      : batchPlanner.next_strategy === 'tooling_or_ci'
+        ? 'Pause route-by-route hardening and invest in tooling/CI guidance next.'
+        : 'Pause and review manually before picking another route.';
   const topFindingText = topFinding
     ? `${topFinding.file} (${topFinding.risk}, ${topFinding.fallback_count} fallback hit(s))`
-    : 'No route findings';
+    : 'No fallback route findings';
 
   return [
     `${AGENT} (${LABEL})`,
     `Mode: audit`,
     `Status: ${status}`,
     `Repo: branch=${repoState.branch}, head=${repoState.head || 'unknown'}, clean=${repoState.working_tree_clean}`,
+    `Total findings: ${scanResults.total_findings}`,
+    `Fallback-to-1 findings: ${scanResults.fallback_to_one_findings}`,
+    `Risk buckets: Critical=${batchPlanner.risk_summary.Critical}, High=${batchPlanner.risk_summary.High}, Medium=${batchPlanner.risk_summary.Medium}, Low=${batchPlanner.risk_summary.Low}`,
+    `Top route family: ${topFamily ? `${topFamily.family} (${topFamily.fallback_to_one_findings} fallback hit(s), ${topFamily.risk})` : 'none'}`,
     `Top finding: ${topFindingText}`,
-    `Recommended next PR: ${recommendation.title}${recommendation.scope_files[0] ? ` -> ${recommendation.scope_files[0]}` : ''}`,
-    `Next human action: review the generated implementation prompt and approve the single-route scope before coding.`,
+    `Recommended strategy: ${batchPlanner.next_strategy}`,
+    `Recommended next PR: ${recommendedScope}`,
+    `Single-route mode: ${singleRouteGuidance}`,
+    `Next human action: review the generated implementation prompt and approve the recommended scope before coding.`,
   ].join('\n');
 }
 
@@ -853,6 +1346,15 @@ function summarizeVerify(repoState, verifyResult, status) {
   const stageText = verifyResult.stage_recommendation.recommended
     ? verifyResult.stage_recommendation.files.join(', ')
     : 'Not recommended yet';
+  let nextAction = 'Next human action: review the verification results and keep push/PR gated behind explicit approval.';
+
+  if (verifyResult.blocking_conditions.length > 0) {
+    nextAction = 'Next human action: resolve blockers first, then stage only the exact recommended files once the scope is clean.';
+  } else if (verifyResult.stage_recommendation.recommended) {
+    nextAction = 'Next human action: stage only the exact recommended files, then commit when you are satisfied with the reported scope.';
+  } else if (repoState.working_tree_clean) {
+    nextAction = 'Next human action: branch is clean; commit/push/PR remain optional and should only happen with explicit approval.';
+  }
 
   return [
     `${AGENT} (${LABEL})`,
@@ -861,7 +1363,7 @@ function summarizeVerify(repoState, verifyResult, status) {
     `Repo: branch=${repoState.branch}, head=${repoState.head || 'unknown'}, clean=${repoState.working_tree_clean}`,
     `Top risk: ${topRisk}`,
     `Stage recommendation: ${stageText}`,
-    `Next human action: resolve blockers first, then stage only the exact recommended files once the scope is clean.`,
+    nextAction,
   ].join('\n');
 }
 
@@ -893,6 +1395,24 @@ function buildOutput(mode, data) {
     commit_recommendation: { recommended: false, message: '' },
     push_recommendation: { recommended: false },
   };
+  const emptyBatchPlanner = {
+    enabled: false,
+    next_strategy: 'hold/manual_review',
+    why: '',
+    single_route_remaining_is_worth_it: false,
+    risk_summary: {
+      Critical: 0,
+      High: 0,
+      Medium: 0,
+      Low: 0,
+    },
+    family_summary: [],
+    batch_candidates: [],
+    ci_guard_recommendation: {
+      recommended: false,
+      why: '',
+    },
+  };
 
   return {
     agent: AGENT,
@@ -903,6 +1423,7 @@ function buildOutput(mode, data) {
     repo: data.repo,
     scan: data.scan || emptyScan,
     recommendation: data.recommendation || emptyRecommendation,
+    batch_planner: data.batch_planner || emptyBatchPlanner,
     verify: data.verify || emptyVerify,
     summary: data.summary || '',
   };
@@ -912,6 +1433,7 @@ function runAuditMode(rootDir, commandRunner = runCommand) {
   const repoState = getRepoState(rootDir, commandRunner);
   const scanResults = scanFiles(rootDir, DEFAULT_SCAN_ROOT);
   const recommendation = chooseNextRecommendation(scanResults);
+  const batchPlanner = buildBatchPlanner(scanResults, recommendation);
 
   let status = 'PASS';
   if (!repoState.working_tree_clean || !repoState.is_main || !repoState.origin_main || repoState.detached) {
@@ -922,7 +1444,7 @@ function runAuditMode(rootDir, commandRunner = runCommand) {
     scanResults.route_findings[0] ? scanResults.route_findings[0].risk_level : 0,
     status === 'WARN' ? 1 : 0,
   );
-  const summary = summarizeAudit(repoState, scanResults, recommendation, status);
+  const summary = summarizeAudit(repoState, scanResults, recommendation, batchPlanner, status);
 
   return buildOutput('audit', {
     status,
@@ -930,6 +1452,7 @@ function runAuditMode(rootDir, commandRunner = runCommand) {
     repo: repoState,
     scan: scanResults,
     recommendation,
+    batch_planner: batchPlanner,
     summary,
   });
 }
@@ -982,10 +1505,14 @@ module.exports = {
   DEFAULT_SCAN_ROOT,
   DEFAULT_VALIDATION_COMMANDS,
   WORKSPACE_PATTERNS,
+  assessBatchCandidate,
+  buildBatchPlanner,
   buildOutput,
+  buildFamilySummary,
   chooseNextRecommendation,
   classifyChangedFiles,
   classifyRouteRisk,
+  determineNextStrategy,
   detectExportedMethods,
   findWorkspacePatterns,
   formatOutput,
@@ -994,6 +1521,7 @@ module.exports = {
   getRepoState,
   getRouteFamily,
   inferFocusedTestCandidates,
+  labelFromRiskLevel,
   main,
   parseGitStatus,
   routeFamiliesForFiles,
@@ -1001,6 +1529,8 @@ module.exports = {
   runCommand,
   runVerifyMode,
   scanFiles,
+  summarizeRiskBuckets,
+  topFamiliesByFallback,
   verifyCurrentBranchState,
 };
 
