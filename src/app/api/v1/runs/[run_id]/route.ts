@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireRole } from '@/lib/auth'
+import { requireWorkspaceId } from '@/lib/enforcement/workspace-scope'
 import { getRun, updateRun } from '@/lib/runs'
 import { logger } from '@/lib/logger'
 
@@ -14,8 +15,11 @@ export async function GET(
   if ('error' in auth) return NextResponse.json({ error: auth.error }, { status: auth.status })
 
   try {
+    const wsResult = requireWorkspaceId(auth.user)
+    if (!('workspaceId' in wsResult)) return wsResult.response
+
     const { run_id } = await params
-    const workspaceId = auth.user.workspace_id ?? 1
+    const { workspaceId } = wsResult
     const run = getRun(run_id, workspaceId)
 
     if (!run) return NextResponse.json({ error: 'Run not found' }, { status: 404 })
@@ -40,9 +44,12 @@ export async function PATCH(
   if ('error' in auth) return NextResponse.json({ error: auth.error }, { status: auth.status })
 
   try {
+    const wsResult = requireWorkspaceId(auth.user)
+    if (!('workspaceId' in wsResult)) return wsResult.response
+
     const { run_id } = await params
     const body = await request.json()
-    const workspaceId = auth.user.workspace_id ?? 1
+    const { workspaceId } = wsResult
 
     const updated = updateRun(run_id, body, workspaceId)
     if (!updated) return NextResponse.json({ error: 'Run not found' }, { status: 404 })
