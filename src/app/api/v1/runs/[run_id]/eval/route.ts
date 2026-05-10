@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireRole } from '@/lib/auth'
+import { requireWorkspaceId } from '@/lib/enforcement/workspace-scope'
 import { attachEval } from '@/lib/runs'
 import { logger } from '@/lib/logger'
 
@@ -14,9 +15,12 @@ export async function PUT(
   if ('error' in auth) return NextResponse.json({ error: auth.error }, { status: auth.status })
 
   try {
+    const wsResult = requireWorkspaceId(auth.user)
+    if (!('workspaceId' in wsResult)) return wsResult.response
+
     const { run_id } = await params
     const body = await request.json()
-    const workspaceId = auth.user.workspace_id ?? 1
+    const { workspaceId } = wsResult
 
     if (body.pass === undefined || body.score === undefined) {
       return NextResponse.json(
