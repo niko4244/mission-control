@@ -4,14 +4,20 @@ import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
 const {
+  assessBatchCandidate,
+  buildBatchPlanner,
+  buildFamilySummary,
   buildOutput,
   chooseNextRecommendation,
   classifyRouteRisk,
+  determineNextStrategy,
   findWorkspacePatterns,
   generateImplementationPrompt,
   runAuditMode,
   runVerifyMode,
   scanFiles,
+  summarizeRiskBuckets,
+  topFamiliesByFallback,
   verifyCurrentBranchState,
 } = require('../../../scripts/security-hardening-runner.cjs')
 
@@ -71,6 +77,54 @@ function routeSource(methods: string[], body = 'const workspaceId = auth.user.wo
     ...methods.map((method) => `export async function ${method}(request: NextRequest) {\n${body}\n}`),
     '',
   ].join('\n')
+}
+
+function makeFinding(overrides: Partial<{
+  file: string
+  family: string
+  methods: string[]
+  line_count: number
+  match_count: number
+  fallback_count: number
+  workspace_reference_count: number
+  patterns: string[]
+  matches: Array<{ label: string, kind: string, match: string, line: number, snippet: string }>
+  risk: string
+  risk_level: number
+  risk_reason: string
+  priority_score: number
+}> = {}) {
+  return {
+    file: 'src/app/api/workflows/route.ts',
+    family: 'workflows',
+    methods: ['GET', 'POST'],
+    line_count: 64,
+    match_count: 2,
+    fallback_count: 1,
+    workspace_reference_count: 1,
+    patterns: ['workspace_id ?? 1', 'auth.user.workspace_id'],
+    matches: [
+      {
+        label: 'workspace_id ?? 1',
+        kind: 'fallback_to_one',
+        match: 'workspace_id ?? 1',
+        line: 12,
+        snippet: 'const workspaceId = auth.user.workspace_id ?? 1',
+      },
+      {
+        label: 'auth.user.workspace_id',
+        kind: 'workspace_reference',
+        match: 'auth.user.workspace_id',
+        line: 12,
+        snippet: 'const workspaceId = auth.user.workspace_id ?? 1',
+      },
+    ],
+    risk: 'High',
+    risk_level: 2,
+    risk_reason: 'workflow or pipeline route',
+    priority_score: 79,
+    ...overrides,
+  }
 }
 
 const tempRoots: string[] = []
@@ -166,6 +220,7 @@ describe('security hardening runner audit helpers', () => {
       branch: 'harden-v1-runs-workspace-route',
       scope_files: ['src/app/api/v1/runs/route.ts'],
     }, {
+      strategy: 'single_route',
       routeFile: 'src/app/api/v1/runs/route.ts',
       focusedTests: ['src/lib/__tests__/v1-runs-route-security.test.ts'],
     })
@@ -175,6 +230,264 @@ describe('security hardening runner audit helpers', () => {
     expect(prompt).toContain('do not create PR until approved')
     expect(prompt).toContain('pnpm typecheck')
     expect(prompt).toContain('rg -n "workspace_id \\?\\? 1|workspaceId \\?\\? 1|auth\\.user\\.workspace_id|user\\.workspace_id|currentUser\\.workspace_id"')
+  })
+})
+
+describe('security hardening runner batch planner', () => {
+  it('groups files by route family', () => {
+    const summary = buildFamilySummary({
+      route_findings: [
+        makeFinding({
+          file: 'src/app/api/v1/runs/[run_id]/route.ts',
+          family: 'v1/runs',
+          risk: 'Critical',
+          risk_level: 3,
+          risk_reason: 'execution/run route',
+        }),
+        makeFinding({
+          file: 'src/app/api/v1/runs/[run_id]/eval/route.ts',
+          family: 'v1/runs',
+          methods: ['PUT'],
+          risk: 'Critical',
+          risk_level: 3,
+          risk_reason: 'execution/run route',
+        }),
+        makeFinding({
+          file: 'src/app/api/tokens/by-agent/route.ts',
+          family: 'tokens',
+          methods: ['GET'],
+          risk: 'Critical',
+          risk_level: 3,
+          risk_reason: 'credential/key/token route',
+        }),
+      ],
+    })
+
+    expect(summary.map((item: { family: string }) => item.family)).toEqual(['v1/runs', 'tokens'])
+    expect(summary[0].route_files).toEqual([
+      'src/app/api/v1/runs/[run_id]/route.ts',
+      'src/app/api/v1/runs/[run_id]/eval/route.ts',
+    ])
+  })
+
+  it('produces risk bucket summary', () => {
+    const summary = summarizeRiskBuckets([
+      makeFinding({ risk: 'Critical', risk_level: 3 }),
+      makeFinding({ risk: 'High', risk_level: 2 }),
+      makeFinding({ risk: 'Medium', risk_level: 1 }),
+      makeFinding({ risk: 'Low', risk_level: 0 }),
+    ])
+
+    expect(summary).toEqual({
+      Critical: 1,
+      High: 1,
+      Medium: 1,
+      Low: 1,
+    })
+  })
+
+  it('identifies top route families by fallback count', () => {
+    const familySummary = [
+      {
+        family: 'tokens',
+        risk: 'Critical',
+        fallback_to_one_findings: 3,
+        route_count: 2,
+      },
+      {
+        family: 'workflows',
+        risk: 'High',
+        fallback_to_one_findings: 2,
+        route_count: 2,
+      },
+      {
+        family: 'requests',
+        risk: 'Medium',
+        fallback_to_one_findings: 1,
+        route_count: 1,
+      },
+    ]
+
+    expect(topFamiliesByFallback(familySummary as any)).toEqual([
+      { family: 'tokens', risk: 'Critical', fallback_to_one_findings: 3, route_count: 2 },
+      { family: 'workflows', risk: 'High', fallback_to_one_findings: 2, route_count: 2 },
+      { family: 'requests', risk: 'Medium', fallback_to_one_findings: 1, route_count: 1 },
+    ])
+  })
+
+  it('recommends single_route when a Critical execution route remains', () => {
+    const recommendation = chooseNextRecommendation({
+      route_findings: [
+        makeFinding({
+          file: 'src/app/api/v1/runs/[run_id]/eval/route.ts',
+          family: 'v1/runs',
+          methods: ['PUT'],
+          risk: 'Critical',
+          risk_level: 3,
+          risk_reason: 'execution/run route',
+          line_count: 39,
+        }),
+      ],
+    })
+    const planner = buildBatchPlanner({
+      total_findings: 2,
+      fallback_to_one_findings: 1,
+      route_findings: [
+        makeFinding({
+          file: 'src/app/api/v1/runs/[run_id]/eval/route.ts',
+          family: 'v1/runs',
+          methods: ['PUT'],
+          risk: 'Critical',
+          risk_level: 3,
+          risk_reason: 'execution/run route',
+          line_count: 39,
+        }),
+      ],
+    }, recommendation)
+
+    expect(planner.next_strategy).toBe('single_route')
+    expect(planner.single_route_remaining_is_worth_it).toBe(true)
+  })
+
+  it('recommends route_family_batch when multiple related High routes remain and no Critical route blocks', () => {
+    const scanResults = {
+      total_findings: 6,
+      fallback_to_one_findings: 3,
+      route_findings: [
+        makeFinding({
+          file: 'src/app/api/workflows/route.ts',
+          family: 'workflows',
+          risk: 'High',
+          risk_level: 2,
+          line_count: 96,
+        }),
+        makeFinding({
+          file: 'src/app/api/workflows/[id]/route.ts',
+          family: 'workflows',
+          methods: ['GET', 'PATCH'],
+          risk: 'High',
+          risk_level: 2,
+          line_count: 82,
+        }),
+      ],
+    }
+    const planner = buildBatchPlanner(scanResults as any, chooseNextRecommendation(scanResults as any))
+
+    expect(planner.next_strategy).toBe('route_family_batch')
+    expect(planner.batch_candidates[0].family).toBe('workflows')
+  })
+
+  it('refuses to batch unrelated domains', () => {
+    const result = assessBatchCandidate([
+      makeFinding({ file: 'src/app/api/workflows/route.ts', family: 'workflows' }),
+      makeFinding({ file: 'src/app/api/projects/route.ts', family: 'projects' }),
+    ])
+
+    expect(result.safe_to_batch).toBe(false)
+    expect(result.why).toContain('unrelated route families')
+  })
+
+  it('refuses to batch gateway/control routes with unrelated routes', () => {
+    const result = assessBatchCandidate([
+      makeFinding({
+        file: 'src/app/api/gateways/route.ts',
+        family: 'gateways',
+        risk: 'Critical',
+        risk_level: 3,
+        risk_reason: 'gateway/terminal/control-adjacent route',
+      }),
+      makeFinding({
+        file: 'src/app/api/gateways/control/route.ts',
+        family: 'gateways',
+        methods: ['POST'],
+        risk: 'Critical',
+        risk_level: 3,
+        risk_reason: 'gateway/terminal/control-adjacent route',
+      }),
+    ])
+
+    expect(result.safe_to_batch).toBe(false)
+    expect(result.why).toContain('Gateway/control-adjacent')
+  })
+
+  it('allows a small tightly related family batch', () => {
+    const result = assessBatchCandidate([
+      makeFinding({
+        file: 'src/app/api/workflows/route.ts',
+        family: 'workflows',
+        risk: 'High',
+        risk_level: 2,
+        line_count: 84,
+      }),
+      makeFinding({
+        file: 'src/app/api/workflows/[id]/route.ts',
+        family: 'workflows',
+        methods: ['GET', 'PATCH'],
+        risk: 'High',
+        risk_level: 2,
+        line_count: 72,
+      }),
+    ])
+
+    expect(result.safe_to_batch).toBe(true)
+  })
+
+  it('generated grouped prompt includes included files, exclusions, git discipline, verify command, and fallback search', () => {
+    const prompt = generateImplementationPrompt({
+      branch: 'harden-workflows-workspace-routes',
+      scope_files: [
+        'src/app/api/workflows/route.ts',
+        'src/app/api/workflows/[id]/route.ts',
+      ],
+      excluded: ['src/app/api/projects/route.ts'],
+    }, {
+      strategy: 'route_family_batch',
+      family: 'workflows',
+      routeFiles: [
+        'src/app/api/workflows/route.ts',
+        'src/app/api/workflows/[id]/route.ts',
+      ],
+      excludedFiles: ['src/app/api/projects/route.ts'],
+      focusedTests: ['src/lib/__tests__/workflows-route-security.test.ts'],
+    })
+
+    expect(prompt).toContain('exact included route files: src/app/api/workflows/route.ts, src/app/api/workflows/[id]/route.ts')
+    expect(prompt).toContain('exact excluded files: src/app/api/projects/route.ts')
+    expect(prompt).toContain('do not use git add .')
+    expect(prompt).toContain('do not push until approved')
+    expect(prompt).toContain('node scripts/security-hardening-runner.cjs verify')
+    expect(prompt).toContain('rg -n "workspace_id \\?\\? 1|workspaceId \\?\\? 1" src/app/api/workflows/route.ts src/app/api/workflows/[id]/route.ts')
+  })
+
+  it('emits a CI guard recommendation when direct fallback hits are low enough', () => {
+    const planner = buildBatchPlanner({
+      total_findings: 20,
+      fallback_to_one_findings: 3,
+      route_findings: [
+        makeFinding({
+          file: 'src/app/api/events/route.ts',
+          family: 'unknown',
+          methods: ['GET'],
+          risk: 'Medium',
+          risk_level: 1,
+          risk_reason: 'read-only workspace-scoped API route',
+        }),
+      ],
+    } as any, chooseNextRecommendation({
+      route_findings: [
+        makeFinding({
+          file: 'src/app/api/events/route.ts',
+          family: 'unknown',
+          methods: ['GET'],
+          risk: 'Medium',
+          risk_level: 1,
+          risk_reason: 'read-only workspace-scoped API route',
+        }),
+      ],
+    } as any))
+
+    expect(planner.ci_guard_recommendation.recommended).toBe(true)
+    expect(planner.ci_guard_recommendation.why).toContain('workspace_id ?? 1')
   })
 })
 
@@ -344,10 +657,11 @@ describe('security hardening runner output shape', () => {
       summary: 'ok',
     })
 
-    expect(output.agent).toBe('Security Hardening Runner v1')
+    expect(output.agent).toBe('Security Hardening Runner v1.1')
     expect(output.label).toBe('OBSERVE ONLY')
     expect(output.mode).toBe('audit')
     expect(output.scan.root).toBe('src/app/api')
+    expect(output.batch_planner.enabled).toBe(false)
     expect(output.verify.push_recommendation.recommended).toBe(false)
   })
 
@@ -373,10 +687,30 @@ describe('security hardening runner output shape', () => {
 
     expect(audit.status).toBe('PASS')
     expect(audit.recommendation.scope_files).toEqual(['src/app/api/v1/runs/route.ts'])
+    expect(audit.batch_planner.enabled).toBe(true)
+    expect(audit.batch_planner.next_strategy).toBe('single_route')
     expect(verify.mode).toBe('verify')
     expect(verify.verify.changed_files).toEqual([
       'src/app/api/v1/runs/route.ts',
       'src/lib/__tests__/v1-runs-route-security.test.ts',
     ])
+  })
+
+  it('does not use blocker wording in verify PASS summary when there are no blocking conditions', () => {
+    const root = makeTempRepo()
+    tempRoots.push(root)
+
+    const verify = runVerifyMode(root, fakeGitRunner({
+      branch: 'feature/runner',
+      status: '',
+      head: '0a4ceaf',
+      originMain: '2b3fcb2',
+      localMain: '2b3fcb2',
+    }))
+
+    expect(verify.status).toBe('PASS')
+    expect(verify.verify.blocking_conditions).toEqual([])
+    expect(verify.summary).not.toContain('resolve blockers first')
+    expect(verify.summary).toContain('branch is clean')
   })
 })
