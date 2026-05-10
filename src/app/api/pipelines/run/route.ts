@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getDatabase, db_helpers } from '@/lib/db'
 import { requireRole } from '@/lib/auth'
+import { requireWorkspaceId } from '@/lib/enforcement/workspace-scope'
 import { eventBus } from '@/lib/event-bus'
 import { logger } from '@/lib/logger'
 
@@ -42,7 +43,9 @@ export async function GET(request: NextRequest) {
   try {
     const db = getDatabase()
     const { searchParams } = new URL(request.url)
-    const workspaceId = auth.user.workspace_id ?? 1
+    const wsResult = requireWorkspaceId(auth.user)
+    if (!('workspaceId' in wsResult)) return wsResult.response
+    const { workspaceId } = wsResult
     const pipelineId = searchParams.get('pipeline_id')
     const runId = searchParams.get('id')
     const limit = Math.min(parseInt(searchParams.get('limit') || '20'), 200)
@@ -97,7 +100,9 @@ export async function POST(request: NextRequest) {
 
   try {
     const db = getDatabase()
-    const workspaceId = auth.user.workspace_id ?? 1
+    const wsResult = requireWorkspaceId(auth.user)
+    if (!('workspaceId' in wsResult)) return wsResult.response
+    const { workspaceId } = wsResult
     const body = await request.json()
     const { action, pipeline_id, run_id } = body
 
