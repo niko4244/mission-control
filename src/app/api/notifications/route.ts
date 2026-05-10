@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDatabase, Notification } from '@/lib/db';
 import { requireRole } from '@/lib/auth';
+import { requireWorkspaceId } from '@/lib/enforcement/workspace-scope'
 import { mutationLimiter } from '@/lib/rate-limit';
 import { validateBody, notificationActionSchema } from '@/lib/validation';
 import { logger } from '@/lib/logger';
@@ -16,7 +17,9 @@ export async function GET(request: NextRequest) {
   try {
     const db = getDatabase();
     const { searchParams } = new URL(request.url);
-    const workspaceId = auth.user.workspace_id ?? 1;
+    const wsResult = requireWorkspaceId(auth.user)
+    if (!('workspaceId' in wsResult)) return wsResult.response
+    const { workspaceId } = wsResult
     
     // Parse query parameters
     const recipient = searchParams.get('recipient');
@@ -147,7 +150,9 @@ export async function PUT(request: NextRequest) {
 
   try {
     const db = getDatabase();
-    const workspaceId = auth.user.workspace_id ?? 1;
+    const wsResult = requireWorkspaceId(auth.user)
+    if (!('workspaceId' in wsResult)) return wsResult.response
+    const { workspaceId } = wsResult
     const body = await request.json();
     const { ids, recipient, markAllRead } = body;
     
@@ -206,7 +211,9 @@ export async function DELETE(request: NextRequest) {
 
   try {
     const db = getDatabase();
-    const workspaceId = auth.user.workspace_id ?? 1;
+    const wsResult = requireWorkspaceId(auth.user)
+    if (!('workspaceId' in wsResult)) return wsResult.response
+    const { workspaceId } = wsResult
     const body = await request.json();
     const { ids, recipient, olderThan } = body;
     
@@ -261,7 +268,9 @@ export async function POST(request: NextRequest) {
 
   try {
     const db = getDatabase();
-    const workspaceId = auth.user.workspace_id ?? 1;
+    const wsResult = requireWorkspaceId(auth.user)
+    if (!('workspaceId' in wsResult)) return wsResult.response
+    const { workspaceId } = wsResult
 
     const result = await validateBody(request, notificationActionSchema);
     if ('error' in result) return result.error;
