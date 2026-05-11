@@ -162,6 +162,15 @@ export const WIDGET_CATALOG: DashboardWidget[] = [
     defaultSize: 'full',
     component: 'GovernorStatusWidget',
   },
+  {
+    id: 'bot-registry',
+    label: 'Bot Registry',
+    description: 'Live bot registry — implemented vs planned bots, hierarchy health, branch and working-tree state',
+    category: 'health',
+    modes: ['local', 'full'],
+    defaultSize: 'full',
+    component: 'BotRegistryWidget',
+  },
 ]
 
 export const LOCAL_DEFAULT_LAYOUT = [
@@ -171,6 +180,7 @@ export const LOCAL_DEFAULT_LAYOUT = [
   'task-pipeline',
   'system-health',
   'governor-status',
+  'bot-registry',
   'remote-hub-status',
   'quick-actions',
 ]
@@ -182,6 +192,7 @@ export const GATEWAY_DEFAULT_LAYOUT = [
   'task-pipeline',
   'system-health',
   'governor-status',
+  'bot-registry',
   'remote-hub-status',
   'quick-actions',
 ]
