@@ -36,6 +36,8 @@
     "check:pr-ready": "node scripts/pr-readiness-checker.cjs check",
     "check:branch": "node scripts/branch-hygiene-checker.cjs check",
     "check:diff-scope": "node scripts/diff-scope-classifier.cjs classify",
+    "govern:middleware": "node scripts/policy-enforcement-middleware.cjs",
+    "govern:schema": "node scripts/authority-decision-schema.cjs",
     "status:mc": "node scripts/workflow-governor.cjs",
     "dev": "pnpm run verify:node && next dev --hostname 127.0.0.1 --port 3000",
     "build": "pnpm run verify:node && next build",
