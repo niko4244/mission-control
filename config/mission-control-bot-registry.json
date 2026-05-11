@@ -34,8 +34,9 @@
     {
       "id": "chief-arbiter",
       "name": "Chief Arbiter",
-      "status": "planned",
+      "status": "implemented",
       "implementation_type": "script",
+      "implementation_script": "scripts/chief-arbiter.cjs",
       "category": "authority",
       "authority_level": 1,
       "reports_to": "human-owner",
