@@ -339,8 +339,9 @@
     {
       "id": "architecture-governor",
       "name": "Architecture Governor",
-      "status": "planned",
+      "status": "implemented",
       "implementation_type": "script",
+      "implementation_script": "scripts/architecture-governor.cjs",
       "category": "governor",
       "authority_level": 3,
       "reports_to": "chief-arbiter",
@@ -449,8 +450,9 @@
     {
       "id": "ui-dashboard-governor",
       "name": "UI / Dashboard Governor",
-      "status": "planned",
+      "status": "implemented",
       "implementation_type": "script",
+      "implementation_script": "scripts/ui-dashboard-governor.cjs",
       "category": "governor",
       "authority_level": 3,
       "reports_to": "chief-arbiter",
@@ -485,8 +487,9 @@
     {
       "id": "documentation-governor",
       "name": "Documentation Governor",
-      "status": "planned",
+      "status": "implemented",
       "implementation_type": "script",
+      "implementation_script": "scripts/documentation-governor.cjs",
       "category": "governor",
       "authority_level": 3,
       "reports_to": "chief-arbiter",
@@ -557,7 +560,7 @@
     {
       "id": "merge-steward",
       "name": "Merge Steward",
-      "status": "planned",
+      "status": "implemented",
       "implementation_type": "script",
       "category": "observer",
       "authority_level": 7,
@@ -583,12 +586,13 @@
         "direct merge",
         "remote mutation"
       ],
-      "notes": "Future supporting bot for merge checklists, release evidence collection, and human-facing merge readiness."
+      "notes": "Future supporting bot for merge checklists, release evidence collection, and human-facing merge readiness.",
+      "implementation_script": "scripts/merge-steward.cjs"
     },
     {
       "id": "ci-sentinel",
       "name": "CI Sentinel",
-      "status": "planned",
+      "status": "implemented",
       "implementation_type": "script",
       "category": "verifier",
       "authority_level": 4,
@@ -614,13 +618,15 @@
       "blocked_domains": [
         "direct git mutation"
       ],
-      "notes": "Future verifier for CI health, flaky test detection, and release readiness checks."
+      "notes": "Future verifier for CI health, flaky test detection, and release readiness checks.",
+      "implementation_script": "scripts/ci-sentinel.cjs"
     },
     {
       "id": "architecture-critic",
       "name": "Architecture Critic",
-      "status": "planned",
+      "status": "implemented",
       "implementation_type": "script",
+      "implementation_script": "scripts/architecture-critic.cjs",
       "category": "verifier",
       "authority_level": 4,
       "reports_to": "architecture-governor",
@@ -649,7 +655,7 @@
     {
       "id": "test-coverage-auditor",
       "name": "Test Coverage Auditor",
-      "status": "planned",
+      "status": "implemented",
       "implementation_type": "script",
       "category": "verifier",
       "authority_level": 4,
@@ -675,13 +681,15 @@
       "blocked_domains": [
         "direct code mutation"
       ],
-      "notes": "Future verifier for focused coverage expectations, regression gaps, and risky untested changes."
+      "notes": "Future verifier for focused coverage expectations, regression gaps, and risky untested changes.",
+      "implementation_script": "scripts/test-coverage-auditor.cjs"
     },
     {
       "id": "route-family-migrator",
       "name": "Route Family Migrator",
-      "status": "planned",
+      "status": "implemented",
       "implementation_type": "script",
+      "implementation_script": "scripts/route-family-migrator.cjs",
       "category": "implementer",
       "authority_level": 6,
       "reports_to": "architecture-governor",
@@ -716,7 +724,7 @@
     {
       "id": "correction-loop-manager",
       "name": "Correction Loop Manager",
-      "status": "planned",
+      "status": "implemented",
       "implementation_type": "script",
       "category": "executor",
       "authority_level": 5,
@@ -745,12 +753,13 @@
       "blocked_domains": [
         "remote mutation"
       ],
-      "notes": "Future executor for bounded correction loops after a governor or arbiter requests changes."
+      "notes": "Future executor for bounded correction loops after a governor or arbiter requests changes.",
+      "implementation_script": "scripts/correction-loop-manager.cjs"
     },
     {
       "id": "lessons-curator",
       "name": "Lessons Curator",
-      "status": "planned",
+      "status": "implemented",
       "implementation_type": "script",
       "category": "observer",
       "authority_level": 7,
@@ -776,12 +785,13 @@
       "blocked_domains": [
         "direct runtime mutation"
       ],
-      "notes": "Future bot for capturing lessons, corrections, and durable operating patterns."
+      "notes": "Future bot for capturing lessons, corrections, and durable operating patterns.",
+      "implementation_script": "scripts/lessons-curator.cjs"
     },
     {
       "id": "prompt-compiler",
       "name": "Prompt Compiler",
-      "status": "planned",
+      "status": "implemented",
       "implementation_type": "script",
       "category": "implementer",
       "authority_level": 6,
@@ -812,12 +822,13 @@
       "blocked_domains": [
         "remote mutation"
       ],
-      "notes": "Future implementer for producing bounded prompts from policy-approved plans."
+      "notes": "Future implementer for producing bounded prompts from policy-approved plans.",
+      "implementation_script": "scripts/prompt-compiler.cjs"
     },
     {
       "id": "operator-dashboard-bot",
       "name": "Operator Dashboard Bot",
-      "status": "planned",
+      "status": "implemented",
       "implementation_type": "script",
       "category": "observer",
       "authority_level": 7,
@@ -844,12 +855,13 @@
         "direct execution",
         "merge"
       ],
-      "notes": "Future visibility bot for surfacing queue state, risk, approvals, and next actions to operators."
+      "notes": "Future visibility bot for surfacing queue state, risk, approvals, and next actions to operators.",
+      "implementation_script": "scripts/operator-dashboard-bot.cjs"
     },
     {
       "id": "bot-registry-inspector",
       "name": "Bot Registry Inspector",
-      "status": "planned",
+      "status": "implemented",
       "implementation_type": "script",
       "category": "observer",
       "authority_level": 7,
@@ -875,13 +887,15 @@
       "blocked_domains": [
         "direct execution"
       ],
-      "notes": "Future observer that audits whether every implemented bot is registered and policy-compliant."
+      "notes": "Future observer that audits whether every implemented bot is registered and policy-compliant.",
+      "implementation_script": "scripts/bot-registry-inspector.cjs"
     },
     {
       "id": "documentation-executor",
       "name": "Documentation Executor",
-      "status": "planned",
+      "status": "implemented",
       "implementation_type": "script",
+      "implementation_script": "scripts/documentation-executor.cjs",
       "category": "executor",
       "authority_level": 5,
       "reports_to": "documentation-governor",

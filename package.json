@@ -1,7 +1,7 @@
 {
   "name": "mission-control",
   "version": "2.0.1",
-  "description": "OpenClaw Mission Control \u00e2\u20ac\u201d open-source agent orchestration dashboard",
+  "description": "OpenClaw Mission Control â€” open-source agent orchestration dashboard",
   "scripts": {
     "verify:node": "node scripts/check-node-version.mjs",
     "api:parity": "node scripts/check-api-contract-parity.mjs --root . --openapi openapi.json --ignore-file scripts/api-contract-parity.ignore",
@@ -66,7 +66,21 @@
     "test:e2e:openclaw": "pnpm test:e2e:openclaw:local && pnpm test:e2e:openclaw:gateway",
     "test:all": "pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm test:e2e",
     "quality:gate": "pnpm test:all",
-    "postinstall": "node -e \"try{require('better-sqlite3')}catch(e){if(e.code==='ERR_DLOPEN_FAILED'||/NODE_MODULE_VERSION/.test(e.message)){console.error('\\n\u00e2\u0161\u00a0  better-sqlite3 compiled for wrong Node version. Run: pnpm rebuild better-sqlite3\\n');process.exit(1)}}\""
+    "postinstall": "node -e \"try{require('better-sqlite3')}catch(e){if(e.code==='ERR_DLOPEN_FAILED'||/NODE_MODULE_VERSION/.test(e.message)){console.error('\\nâš   better-sqlite3 compiled for wrong Node version. Run: pnpm rebuild better-sqlite3\\n');process.exit(1)}}\"",
+    "govern:ci-sentinel": "node scripts/ci-sentinel.cjs",
+    "govern:merge-steward": "node scripts/merge-steward.cjs",
+    "audit:coverage": "node scripts/test-coverage-auditor.cjs",
+    "inspect:registry": "node scripts/bot-registry-inspector.cjs",
+    "govern:architecture": "node scripts/architecture-governor.cjs",
+    "audit:architecture": "node scripts/architecture-critic.cjs",
+    "migrate:routes": "node scripts/route-family-migrator.cjs",
+    "govern:docs": "node scripts/documentation-governor.cjs",
+    "execute:docs": "node scripts/documentation-executor.cjs",
+    "govern:ui": "node scripts/ui-dashboard-governor.cjs",
+    "dashboard:ops": "node scripts/operator-dashboard-bot.cjs dashboard",
+    "lessons:add": "node scripts/lessons-curator.cjs add",
+    "corrections:list": "node scripts/correction-loop-manager.cjs list",
+    "prompt:compile": "node scripts/prompt-compiler.cjs compile"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.2.4",
