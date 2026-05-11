@@ -5,7 +5,7 @@ import { requireRole } from '@/lib/auth'
 // GET /api/virtual-portfolio/picks?agentId=4&status=open&limit=50
 export async function GET(request: NextRequest) {
   const auth = requireRole(request, 'viewer')
-  if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if ('error' in auth) return NextResponse.json({ error: auth.error }, { status: auth.status })
 
   const { searchParams } = new URL(request.url)
   const agentId = searchParams.get('agentId')
@@ -28,7 +28,7 @@ export async function GET(request: NextRequest) {
 // POST /api/virtual-portfolio/picks — record a new pick from an agent
 export async function POST(request: NextRequest) {
   const auth = requireRole(request, 'viewer')
-  if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if ('error' in auth) return NextResponse.json({ error: auth.error }, { status: auth.status })
 
   const body = await request.json() as {
     agent_id: number
@@ -96,7 +96,7 @@ export async function POST(request: NextRequest) {
 // PATCH /api/virtual-portfolio/picks — resolve a pick (won/lost/push/closed)
 export async function PATCH(request: NextRequest) {
   const auth = requireRole(request, 'viewer')
-  if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if ('error' in auth) return NextResponse.json({ error: auth.error }, { status: auth.status })
 
   const body = await request.json() as {
     id: number

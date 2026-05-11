@@ -6,7 +6,7 @@ import { requireRole } from '@/lib/auth'
 // Returns portfolio summary + recent picks for one or all portfolio agents
 export async function GET(request: NextRequest) {
   const auth = requireRole(request, 'viewer')
-  if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if ('error' in auth) return NextResponse.json({ error: auth.error }, { status: auth.status })
 
   const { searchParams } = new URL(request.url)
   const agentIdParam = searchParams.get('agentId')
@@ -47,7 +47,7 @@ export async function GET(request: NextRequest) {
 // POST /api/virtual-portfolio  — seed or upsert a portfolio for an agent
 export async function POST(request: NextRequest) {
   const auth = requireRole(request, 'viewer')
-  if (!auth) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if ('error' in auth) return NextResponse.json({ error: auth.error }, { status: auth.status })
 
   const body = await request.json() as {
     agent_id: number
