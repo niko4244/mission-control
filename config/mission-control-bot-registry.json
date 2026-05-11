@@ -519,8 +519,9 @@
     {
       "id": "release-manager",
       "name": "Release Manager",
-      "status": "planned",
+      "status": "implemented",
       "implementation_type": "script",
+      "implementation_script": "scripts/release-manager.cjs",
       "category": "executor",
       "authority_level": 5,
       "reports_to": "release-governor",
