@@ -12,6 +12,8 @@ import { syncSkillsFromDisk } from './skill-sync'
 import { syncLocalAgents } from './local-agent-sync'
 import { dispatchAssignedTasks, runAegisReviews, requeueStaleTasks, autoRouteInboxTasks } from './task-dispatch'
 import { spawnRecurringTasks } from './recurring-tasks'
+import { spawn } from 'child_process'
+import { resolve } from 'path'
 
 const BACKUP_DIR = join(dirname(config.dbPath), 'backups')
 
@@ -275,6 +277,70 @@ const DAILY_MS = 24 * 60 * 60 * 1000
 const FIVE_MINUTES_MS = 5 * 60 * 1000
 const TICK_MS = 60 * 1000 // Check every minute
 
+/** Run the portfolio pick runner for an agent as a child process */
+function spawnPortfolioRunner(agentName: string): Promise<{ ok: boolean; message: string }> {
+  return new Promise((resolve_) => {
+    const script = resolve(process.cwd(), 'scripts', 'agent-portfolio-runner.cjs')
+    const apiKey = process.env.API_KEY || ''
+    const child = spawn(process.execPath, [script, '--agent', agentName, '--execute'], {
+      env: { ...process.env, MC_API_KEY: apiKey },
+      timeout: 240_000,
+    })
+    let out = ''
+    child.stdout.on('data', (d: Buffer) => { out += d.toString() })
+    child.on('close', (code: number) => {
+      try {
+        const jsonStart = out.indexOf('{')
+        const result = jsonStart >= 0 ? JSON.parse(out.slice(jsonStart)) : {}
+        const status = result.status === 'PASS'
+        const pick = result.pick ? `${result.pick.symbol || result.pick.description?.slice(0, 40)} $${result.pick.amount}` : ''
+        resolve_({ ok: status, message: status ? `${agentName} pick recorded: ${pick}` : `${agentName} pick failed: ${result.error || 'unknown'}` })
+      } catch {
+        resolve_({ ok: code === 0, message: `${agentName} runner exited ${code}` })
+      }
+    })
+    child.on('error', (err: Error) => resolve_({ ok: false, message: `${agentName} runner error: ${err.message}` }))
+  })
+}
+
+/** Check if portfolio picks should run for each agent today */
+async function runPortfolioPicks(): Promise<{ ok: boolean; message: string }> {
+  const db = getDatabase()
+  const now = new Date()
+  const hour = now.getHours()
+  const dayOfWeek = now.getDay() // 0=Sun, 6=Sat
+  const todayKey = now.toISOString().slice(0, 10) // YYYY-MM-DD
+  const messages: string[] = []
+  let anyRan = false
+
+  const agents: Array<{ name: string; triggerHour: number; weekdayOnly: boolean }> = [
+    { name: 'SportsClaw', triggerHour: 9, weekdayOnly: false },
+    { name: 'TradingDesk', triggerHour: 8, weekdayOnly: true },
+  ]
+
+  for (const agent of agents) {
+    if (hour < agent.triggerHour) continue
+    if (agent.weekdayOnly && (dayOfWeek === 0 || dayOfWeek === 6)) continue
+
+    const settingKey = `portfolio.last_run.${agent.name.toLowerCase()}`
+    const lastRunRow = db.prepare('SELECT value FROM settings WHERE key = ?').get(settingKey) as { value: string } | undefined
+    if (lastRunRow?.value === todayKey) continue // Already ran today
+
+    try {
+      const result = await spawnPortfolioRunner(agent.name)
+      db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(settingKey, todayKey)
+      messages.push(result.message)
+      anyRan = true
+      logAuditEvent({ action: 'portfolio_pick_run', actor: 'scheduler', detail: { agent: agent.name, result: result.message } })
+    } catch (err: any) {
+      messages.push(`${agent.name} error: ${err.message}`)
+    }
+  }
+
+  if (messages.length === 0) return { ok: true, message: 'No portfolio picks due' }
+  return { ok: true, message: messages.join(' | ') }
+}
+
 /** Initialize the scheduler */
 export function initScheduler() {
   if (tickInterval) return // Already running
@@ -398,6 +464,15 @@ export function initScheduler() {
     running: false,
   })
 
+  tasks.set('portfolio_picks', {
+    name: 'Agent Portfolio Picks',
+    intervalMs: TICK_MS, // Check every 60s — fires agents at configured hours
+    lastRun: null,
+    nextRun: now + 30_000, // First check 30s after startup
+    enabled: true,
+    running: false,
+  })
+
   // Start the tick loop
   tickInterval = setInterval(tick, TICK_MS)
   logger.info('Scheduler initialized - backup at ~3AM, cleanup at ~4AM, heartbeat every 5m, webhook/claude/skill/local-agent/gateway-agent sync every 60s')
@@ -433,8 +508,10 @@ async function tick() {
       : id === 'aegis_review' ? 'general.aegis_review'
       : id === 'recurring_task_spawn' ? 'general.recurring_task_spawn'
       : id === 'stale_task_requeue' ? 'general.stale_task_requeue'
+      : id === 'portfolio_picks' ? 'general.portfolio_picks'
+      : id === 'portfolio_picks' ? 'general.portfolio_picks'
       : 'general.agent_heartbeat'
-    const defaultEnabled = id === 'agent_heartbeat' || id === 'webhook_retry' || id === 'claude_session_scan' || id === 'skill_sync' || id === 'local_agent_sync' || id === 'gateway_agent_sync' || id === 'task_dispatch' || id === 'aegis_review' || id === 'recurring_task_spawn' || id === 'stale_task_requeue'
+    const defaultEnabled = id === 'agent_heartbeat' || id === 'webhook_retry' || id === 'claude_session_scan' || id === 'skill_sync' || id === 'local_agent_sync' || id === 'gateway_agent_sync' || id === 'task_dispatch' || id === 'aegis_review' || id === 'recurring_task_spawn' || id === 'stale_task_requeue' || id === 'portfolio_picks'
     if (!isSettingEnabled(settingKey, defaultEnabled)) continue
 
     task.running = true
@@ -457,6 +534,7 @@ async function tick() {
         : id === 'aegis_review' ? await runAegisReviews()
         : id === 'recurring_task_spawn' ? await spawnRecurringTasks()
         : id === 'stale_task_requeue' ? await requeueStaleTasks()
+        : id === 'portfolio_picks' ? await runPortfolioPicks()
         : await runCleanup()
       task.lastResult = { ...result, timestamp: now }
     } catch (err: any) {
@@ -493,6 +571,7 @@ export function getSchedulerStatus() {
       : id === 'aegis_review' ? 'general.aegis_review'
       : id === 'recurring_task_spawn' ? 'general.recurring_task_spawn'
       : id === 'stale_task_requeue' ? 'general.stale_task_requeue'
+      : id === 'portfolio_picks' ? 'general.portfolio_picks'
       : 'general.agent_heartbeat'
     const defaultEnabled = id === 'agent_heartbeat' || id === 'webhook_retry' || id === 'claude_session_scan' || id === 'skill_sync' || id === 'local_agent_sync' || id === 'gateway_agent_sync' || id === 'task_dispatch' || id === 'aegis_review' || id === 'recurring_task_spawn' || id === 'stale_task_requeue'
     result.push({
@@ -523,6 +602,7 @@ export async function triggerTask(taskId: string): Promise<{ ok: boolean; messag
   if (taskId === 'aegis_review') return runAegisReviews()
   if (taskId === 'recurring_task_spawn') return spawnRecurringTasks()
   if (taskId === 'stale_task_requeue') return requeueStaleTasks()
+  if (taskId === 'portfolio_picks') return runPortfolioPicks()
   return { ok: false, message: `Unknown task: ${taskId}` }
 }
 
