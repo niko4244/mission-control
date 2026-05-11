@@ -21,13 +21,18 @@ interface Notification {
 
 export function NotificationsPanel() {
   const t = useTranslations('notifications')
-  const [recipient, setRecipient] = useState<string>(() => {
-    if (typeof window === 'undefined') return ''
-    return window.localStorage.getItem('mc.notifications.recipient') || ''
-  })
+  const [recipient, setRecipient] = useState('')
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    try {
+      setRecipient(window.localStorage.getItem('mc.notifications.recipient') || '')
+    } catch {
+      setRecipient('')
+    }
+  }, [])
 
   const fetchNotifications = useCallback(async () => {
     if (!recipient) return
