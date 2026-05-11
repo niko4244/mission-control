@@ -1568,6 +1568,103 @@
       ],
       "blocked_domains": [],
       "notes": "Pre-existing preflight checks run before Mission Control orchestration begins."
+    },
+    {
+      "id": "agent-portfolio-runner",
+      "name": "Agent Portfolio Runner",
+      "status": "implemented",
+      "implementation_type": "script",
+      "implementation_script": "scripts/agent-portfolio-runner.cjs",
+      "category": "executor",
+      "authority_level": 5,
+      "reports_to": "chief-arbiter",
+      "supervises": [],
+      "may_mutate": false,
+      "may_stage": false,
+      "may_commit": false,
+      "may_push": false,
+      "may_create_pr": false,
+      "may_merge": false,
+      "may_authorize": false,
+      "may_reject": false,
+      "may_request_corrections": false,
+      "human_approval_required_for": [
+        "push",
+        "create_pr",
+        "merge"
+      ],
+      "allowed_domains": [
+        "portfolio",
+        "agents",
+        "picks"
+      ],
+      "blocked_domains": [
+        "git mutation",
+        "remote mutation"
+      ],
+      "notes": "Autonomous pick generator for SportsClaw (sports) and TradingDesk (stocks). Calls Ollama deepseek-r1, validates JSON schema, records picks via portfolio API. Runs on scheduler daily."
+    },
+    {
+      "id": "repo-steward",
+      "name": "Repo Steward",
+      "status": "implemented",
+      "implementation_type": "script",
+      "implementation_script": "scripts/repo-steward.cjs",
+      "category": "observer",
+      "authority_level": 7,
+      "reports_to": "chief-arbiter",
+      "supervises": [],
+      "may_mutate": false,
+      "may_stage": false,
+      "may_commit": false,
+      "may_push": false,
+      "may_create_pr": false,
+      "may_merge": false,
+      "may_authorize": false,
+      "may_reject": false,
+      "may_request_corrections": true,
+      "human_approval_required_for": [],
+      "allowed_domains": [
+        "repository",
+        "drift",
+        "health"
+      ],
+      "blocked_domains": [
+        "git mutation",
+        "remote mutation"
+      ],
+      "notes": "Pre-existing repository health observer. Scans for drift, stale branches, and repo hygiene issues."
+    },
+    {
+      "id": "systems-curator",
+      "name": "Systems Curator",
+      "status": "implemented",
+      "implementation_type": "script",
+      "implementation_script": "scripts/systems-curator.cjs",
+      "category": "observer",
+      "authority_level": 7,
+      "reports_to": "chief-arbiter",
+      "supervises": [],
+      "may_mutate": false,
+      "may_stage": false,
+      "may_commit": false,
+      "may_push": false,
+      "may_create_pr": false,
+      "may_merge": false,
+      "may_authorize": false,
+      "may_reject": false,
+      "may_request_corrections": true,
+      "human_approval_required_for": [],
+      "allowed_domains": [
+        "systems",
+        "curation",
+        "inventory"
+      ],
+      "blocked_domains": [
+        "git mutation",
+        "remote mutation"
+      ],
+      "notes": "Pre-existing systems curator. Maintains inventory and curation of Mission Control system components."
     }
   ]
 }
