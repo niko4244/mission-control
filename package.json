@@ -43,6 +43,8 @@
     "score:risk": "node scripts/risk-scoring-engine.cjs",
     "gate:validate": "node scripts/validation-gate.cjs",
     "protocol:break-glass": "node scripts/break-glass-protocol.cjs",
+    "backlog:list": "node scripts/backlog-reconciler.cjs list",
+    "escalate:submit": "node scripts/escalation-protocol.cjs submit",
     "status:mc": "node scripts/workflow-governor.cjs",
     "dev": "pnpm run verify:node && next dev --hostname 127.0.0.1 --port 3000",
     "build": "pnpm run verify:node && next build",
