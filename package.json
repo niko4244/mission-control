@@ -29,6 +29,7 @@
     "journal:exec": "node scripts/execution-journal.cjs",
     "steward:systems": "node scripts/systems-steward.cjs",
     "govern:arbiter": "node scripts/chief-arbiter.cjs",
+    "govern:constitution": "node scripts/constitution-engine.cjs",
     "status:mc": "node scripts/workflow-governor.cjs",
     "dev": "pnpm run verify:node && next dev --hostname 127.0.0.1 --port 3000",
     "build": "pnpm run verify:node && next build",
