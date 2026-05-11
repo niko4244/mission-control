@@ -23,6 +23,7 @@ import { TaskPipelineWidget } from './widgets/task-pipeline-widget'
 import { SystemHealthWidget } from './widgets/system-health-widget'
 import { GovernorStatusWidget } from './widgets/governor-status-widget'
 import { BotRegistryWidget } from './widgets/bot-registry-widget'
+import { AgentPortfolioWidget } from './widgets/agent-portfolio-widget'
 import { RemoteHubStatusWidget } from './widgets/remote-hub-status-widget'
 
 const WIDGET_COMPONENTS: Record<string, React.ComponentType<{ data: DashboardData }>> = {
@@ -44,6 +45,7 @@ const WIDGET_COMPONENTS: Record<string, React.ComponentType<{ data: DashboardDat
   'quick-actions': QuickActionsWidget,
   'governor-status': GovernorStatusWidget,
   'bot-registry': BotRegistryWidget,
+  'agent-portfolio': AgentPortfolioWidget,
 }
 
 // Map widget defaultSize to CSS grid column spans

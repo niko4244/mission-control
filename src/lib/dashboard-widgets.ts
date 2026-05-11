@@ -171,6 +171,15 @@ export const WIDGET_CATALOG: DashboardWidget[] = [
     defaultSize: 'full',
     component: 'BotRegistryWidget',
   },
+  {
+    id: 'agent-portfolio',
+    label: 'Agent Portfolios',
+    description: 'SportsClaw picks & TradingDesk trades — $100 starting balance, ROI, win rate, open positions',
+    category: 'metrics',
+    modes: ['local', 'full'],
+    defaultSize: 'full',
+    component: 'AgentPortfolioWidget',
+  },
 ]
 
 export const LOCAL_DEFAULT_LAYOUT = [
@@ -179,6 +188,7 @@ export const LOCAL_DEFAULT_LAYOUT = [
   'fleet-status',
   'task-pipeline',
   'system-health',
+  'agent-portfolio',
   'governor-status',
   'bot-registry',
   'remote-hub-status',
