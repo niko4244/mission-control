@@ -81,7 +81,7 @@ function PickRow({ pick }: { pick: Pick }) {
       onClick={() => setExpanded((e) => !e)}
     >
       <div className="flex items-center gap-2 text-2xs">
-        <span className="text-muted-foreground/60 font-mono-tight w-12 shrink-0">{date}</span>
+        <span className="text-muted-foreground/60 font-mono-tight w-12 shrink-0" suppressHydrationWarning>{date}</span>
         {pick.symbol && (
           <span className="font-mono-tight font-semibold text-foreground/80 shrink-0">{pick.symbol}</span>
         )}

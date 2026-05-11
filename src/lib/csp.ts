@@ -1,12 +1,15 @@
 export function buildMissionControlCsp(input: { nonce: string; googleEnabled: boolean }): string {
   const { nonce, googleEnabled } = input
+  const isDev = process.env.NODE_ENV === 'development'
 
   return [
     `default-src 'self'`,
     `base-uri 'self'`,
     `object-src 'none'`,
     `frame-ancestors 'none'`,
-    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic' blob:${googleEnabled ? ' https://accounts.google.com' : ''}`,
+    // In development, React DevTools requires 'unsafe-eval' for stack trace reconstruction.
+    // This is never included in production builds.
+    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic' blob:${isDev ? " 'unsafe-eval'" : ''}${googleEnabled ? ' https://accounts.google.com' : ''}`,
     `style-src 'self' 'unsafe-inline'`,
     `style-src-elem 'self' 'unsafe-inline'`,
     `style-src-attr 'unsafe-inline'`,

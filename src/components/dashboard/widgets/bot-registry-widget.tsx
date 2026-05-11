@@ -122,7 +122,7 @@ export function BotRegistryWidget({ data }: { data: DashboardData }) {
             : <span className="text-amber-400">dirty</span>}
         </span>
 
-        <span className="text-muted-foreground/50 font-mono-tight">{tsStr}</span>
+        <span className="text-muted-foreground/50 font-mono-tight" suppressHydrationWarning>{tsStr}</span>
 
         <button
           type="button"
