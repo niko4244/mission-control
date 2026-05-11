@@ -1,0 +1,564 @@
+{
+  "version": 1,
+  "label": "Mission Control Bot Operating System / Constitution v1",
+  "observe_only": true,
+  "required_core_bots": [
+    "human-owner",
+    "chief-arbiter",
+    "policy-engine",
+    "task-router",
+    "security-hardening-runner",
+    "security-governor",
+    "security-arbiter",
+    "security-executor",
+    "release-manager",
+    "merge-steward",
+    "ci-sentinel",
+    "architecture-critic",
+    "test-coverage-auditor",
+    "route-family-migrator",
+    "correction-loop-manager",
+    "lessons-curator",
+    "prompt-compiler",
+    "operator-dashboard-bot",
+    "bot-registry-inspector",
+    "appliance-knowledge-governor",
+    "local-model-provider-governor",
+    "ui-dashboard-governor",
+    "documentation-governor"
+  ],
+  "risk_classes": [
+    {
+      "id": "Critical",
+      "description": "Protected-domain, auth, security, release, execution, or schema-adjacent changes."
+    },
+    {
+      "id": "High",
+      "description": "Important runtime, release, workflow, or architecture changes with meaningful blast radius."
+    },
+    {
+      "id": "Medium",
+      "description": "Contained product or architecture work with reviewable scope."
+    },
+    {
+      "id": "Low",
+      "description": "Small localized work with low operational risk."
+    },
+    {
+      "id": "Tooling",
+      "description": "Local tooling, scripts, CI helpers, and non-runtime automation."
+    },
+    {
+      "id": "Docs",
+      "description": "Documentation-only changes with no runtime impact."
+    },
+    {
+      "id": "TestOnly",
+      "description": "Test-only changes with no production runtime mutation."
+    }
+  ],
+  "approval_matrix": {
+    "Critical": {
+      "can_auto_plan": [
+        "chief-arbiter",
+        "security-arbiter"
+      ],
+      "can_auto_approve_prompt": [
+        "chief-arbiter",
+        "security-arbiter"
+      ],
+      "can_auto_stage": [
+        "chief-arbiter",
+        "security-arbiter"
+      ],
+      "can_auto_commit": [
+        "chief-arbiter",
+        "security-arbiter"
+      ],
+      "can_auto_push": [],
+      "can_auto_create_pr": [],
+      "can_auto_merge": [],
+      "human_required_for": [
+        "push",
+        "create_pr",
+        "merge",
+        "protected-domain exceptions"
+      ]
+    },
+    "High": {
+      "can_auto_plan": [
+        "chief-arbiter"
+      ],
+      "can_auto_approve_prompt": [
+        "chief-arbiter"
+      ],
+      "can_auto_stage": [
+        "chief-arbiter"
+      ],
+      "can_auto_commit": [
+        "chief-arbiter"
+      ],
+      "can_auto_push": [],
+      "can_auto_create_pr": [],
+      "can_auto_merge": [],
+      "human_required_for": [
+        "push",
+        "create_pr",
+        "merge"
+      ]
+    },
+    "Medium": {
+      "can_auto_plan": [
+        "chief-arbiter"
+      ],
+      "can_auto_approve_prompt": [
+        "chief-arbiter"
+      ],
+      "can_auto_stage": [
+        "chief-arbiter"
+      ],
+      "can_auto_commit": [
+        "chief-arbiter"
+      ],
+      "can_auto_push": [],
+      "can_auto_create_pr": [],
+      "can_auto_merge": [],
+      "human_required_for": [
+        "merge"
+      ]
+    },
+    "Low": {
+      "can_auto_plan": [
+        "chief-arbiter"
+      ],
+      "can_auto_approve_prompt": [
+        "chief-arbiter"
+      ],
+      "can_auto_stage": [
+        "chief-arbiter"
+      ],
+      "can_auto_commit": [
+        "chief-arbiter"
+      ],
+      "can_auto_push": [],
+      "can_auto_create_pr": [
+        "chief-arbiter"
+      ],
+      "can_auto_merge": [],
+      "human_required_for": [
+        "merge"
+      ]
+    },
+    "Tooling": {
+      "can_auto_plan": [
+        "chief-arbiter"
+      ],
+      "can_auto_approve_prompt": [
+        "chief-arbiter"
+      ],
+      "can_auto_stage": [
+        "chief-arbiter"
+      ],
+      "can_auto_commit": [
+        "chief-arbiter"
+      ],
+      "can_auto_push": [],
+      "can_auto_create_pr": [
+        "chief-arbiter"
+      ],
+      "can_auto_merge": [],
+      "human_required_for": [
+        "merge"
+      ]
+    },
+    "Docs": {
+      "can_auto_plan": [
+        "chief-arbiter"
+      ],
+      "can_auto_approve_prompt": [
+        "chief-arbiter"
+      ],
+      "can_auto_stage": [
+        "chief-arbiter"
+      ],
+      "can_auto_commit": [
+        "chief-arbiter"
+      ],
+      "can_auto_push": [],
+      "can_auto_create_pr": [
+        "chief-arbiter"
+      ],
+      "can_auto_merge": [],
+      "human_required_for": [
+        "merge"
+      ]
+    },
+    "TestOnly": {
+      "can_auto_plan": [
+        "chief-arbiter"
+      ],
+      "can_auto_approve_prompt": [
+        "chief-arbiter"
+      ],
+      "can_auto_stage": [
+        "chief-arbiter"
+      ],
+      "can_auto_commit": [
+        "chief-arbiter"
+      ],
+      "can_auto_push": [],
+      "can_auto_create_pr": [
+        "chief-arbiter"
+      ],
+      "can_auto_merge": [],
+      "human_required_for": [
+        "merge"
+      ]
+    }
+  },
+  "hard_blocks": [
+    "git add .",
+    "lockfile drift unless explicitly approved",
+    "package drift unless explicitly approved",
+    "failed validation",
+    "fallback regression",
+    "untracked intended test files",
+    "broad unrelated route family changes",
+    "client-supplied workspace ID trusted",
+    "raw internal error leakage",
+    "helper/auth/workspace enforcement changes without explicit approval",
+    "schema/database changes without explicit approval",
+    "merge without human approval"
+  ],
+  "protected_domains": [
+    "auth",
+    "workspace enforcement",
+    "tokens",
+    "keys",
+    "gateways",
+    "terminal",
+    "exec",
+    "approvals",
+    "delivery",
+    "runs",
+    "database/schema",
+    "package files",
+    "lockfiles"
+  ],
+  "required_validation": {
+    "Critical": [
+      "focused test",
+      "typecheck",
+      "lint",
+      "full test",
+      "build",
+      "runner verify",
+      "governor verify",
+      "arbiter review"
+    ],
+    "High": [
+      "focused test",
+      "typecheck",
+      "lint",
+      "full test",
+      "build",
+      "governor verify",
+      "arbiter review if applicable"
+    ],
+    "Medium": [
+      "focused test",
+      "typecheck",
+      "lint",
+      "full test",
+      "build"
+    ],
+    "Low": [
+      "focused test",
+      "typecheck",
+      "lint",
+      "full test",
+      "build"
+    ],
+    "Tooling": [
+      "focused tool test",
+      "typecheck",
+      "lint",
+      "full test",
+      "build",
+      "self-check command if applicable"
+    ],
+    "Docs": [
+      "no build break",
+      "no unrelated files"
+    ],
+    "TestOnly": [
+      "focused test",
+      "typecheck",
+      "lint",
+      "full test",
+      "build"
+    ]
+  },
+  "authority_rules": {
+    "levels": {
+      "0": {
+        "label": "human_owner",
+        "may_mutate": true,
+        "may_stage": true,
+        "may_commit": true,
+        "may_push": true,
+        "may_create_pr": true,
+        "may_merge": true,
+        "may_authorize": true,
+        "may_reject": true,
+        "may_request_corrections": true
+      },
+      "1": {
+        "label": "chief_arbiter",
+        "may_mutate": false,
+        "may_stage": false,
+        "may_commit": false,
+        "may_push": false,
+        "may_create_pr": false,
+        "may_merge": false,
+        "may_authorize": true,
+        "may_reject": true,
+        "may_request_corrections": true
+      },
+      "2": {
+        "label": "policy_engine",
+        "may_mutate": false,
+        "may_stage": false,
+        "may_commit": false,
+        "may_push": false,
+        "may_create_pr": false,
+        "may_merge": false,
+        "may_authorize": false,
+        "may_reject": false,
+        "may_request_corrections": false
+      },
+      "3": {
+        "label": "domain_governor",
+        "may_mutate": false,
+        "may_stage": false,
+        "may_commit": false,
+        "may_push": false,
+        "may_create_pr": false,
+        "may_merge": false,
+        "may_authorize": true,
+        "may_reject": true,
+        "may_request_corrections": true
+      },
+      "4": {
+        "label": "verifier_runner",
+        "may_mutate": false,
+        "may_stage": false,
+        "may_commit": false,
+        "may_push": false,
+        "may_create_pr": false,
+        "may_merge": false,
+        "may_authorize": false,
+        "may_reject": false,
+        "may_request_corrections": true
+      },
+      "5": {
+        "label": "executor",
+        "may_mutate": true,
+        "may_stage": true,
+        "may_commit": true,
+        "may_push": false,
+        "may_create_pr": false,
+        "may_merge": false,
+        "may_authorize": false,
+        "may_reject": false,
+        "may_request_corrections": false
+      },
+      "6": {
+        "label": "implementer",
+        "may_mutate": true,
+        "may_stage": false,
+        "may_commit": false,
+        "may_push": false,
+        "may_create_pr": false,
+        "may_merge": false,
+        "may_authorize": false,
+        "may_reject": false,
+        "may_request_corrections": true
+      },
+      "7": {
+        "label": "observer",
+        "may_mutate": false,
+        "may_stage": false,
+        "may_commit": false,
+        "may_push": false,
+        "may_create_pr": false,
+        "may_merge": false,
+        "may_authorize": false,
+        "may_reject": false,
+        "may_request_corrections": true
+      }
+    },
+    "human_only_actions": [
+      "merge",
+      "override explicit human block"
+    ]
+  },
+  "routing_profiles": [
+    {
+      "domain": "security",
+      "keywords": [
+        "security",
+        "harden",
+        "workspace fallback",
+        "workspace",
+        "token",
+        "tokens",
+        "auth",
+        "approval",
+        "run",
+        "runs",
+        "gateway",
+        "gateways",
+        "key",
+        "keys",
+        "terminal",
+        "exec"
+      ],
+      "governor": "security-governor",
+      "runner": "security-hardening-runner",
+      "executor": "security-executor",
+      "arbiter": "chief-arbiter",
+      "default_risk": "High"
+    },
+    {
+      "domain": "release",
+      "keywords": [
+        "release",
+        "pr",
+        "pull request",
+        "merge",
+        "deploy",
+        "delivery",
+        "ship"
+      ],
+      "governor": "release-governor",
+      "runner": "ci-sentinel",
+      "executor": "release-manager",
+      "arbiter": "chief-arbiter",
+      "default_risk": "High"
+    },
+    {
+      "domain": "architecture",
+      "keywords": [
+        "architecture",
+        "boundary",
+        "boundaries",
+        "drift",
+        "refactor",
+        "migrate",
+        "route family"
+      ],
+      "governor": "architecture-governor",
+      "runner": "architecture-critic",
+      "executor": "route-family-migrator",
+      "arbiter": "chief-arbiter",
+      "default_risk": "Medium"
+    },
+    {
+      "domain": "appliance-knowledge",
+      "keywords": [
+        "appliance",
+        "diagnostic",
+        "diagnostics",
+        "device",
+        "knowledge"
+      ],
+      "governor": "appliance-knowledge-governor",
+      "runner": "",
+      "executor": "",
+      "arbiter": "chief-arbiter",
+      "default_risk": "Medium"
+    },
+    {
+      "domain": "local-model-provider",
+      "keywords": [
+        "provider",
+        "providers",
+        "model",
+        "models",
+        "gateway",
+        "gateways",
+        "local capabilities",
+        "ollama"
+      ],
+      "governor": "local-model-provider-governor",
+      "runner": "",
+      "executor": "",
+      "arbiter": "chief-arbiter",
+      "default_risk": "High"
+    },
+    {
+      "domain": "ui-dashboard",
+      "keywords": [
+        "dashboard",
+        "ui",
+        "ux",
+        "visibility",
+        "operator"
+      ],
+      "governor": "ui-dashboard-governor",
+      "runner": "operator-dashboard-bot",
+      "executor": "",
+      "arbiter": "chief-arbiter",
+      "default_risk": "Medium"
+    },
+    {
+      "domain": "docs",
+      "keywords": [
+        "docs",
+        "documentation",
+        "readme",
+        "typo",
+        "guide"
+      ],
+      "governor": "documentation-governor",
+      "runner": "",
+      "executor": "documentation-executor",
+      "arbiter": "chief-arbiter",
+      "default_risk": "Docs"
+    },
+    {
+      "domain": "tooling",
+      "keywords": [
+        "tooling",
+        "script",
+        "scripts",
+        "lint",
+        "typecheck",
+        "vitest",
+        "test harness",
+        "config"
+      ],
+      "governor": "chief-arbiter",
+      "runner": "test-coverage-auditor",
+      "executor": "prompt-compiler",
+      "arbiter": "chief-arbiter",
+      "default_risk": "Tooling"
+    }
+  ],
+  "dashboard_visibility": {
+    "fields": [
+      "id",
+      "status",
+      "category",
+      "authority_level",
+      "reports_to",
+      "supervises",
+      "allowed_domains",
+      "blocked_domains",
+      "last_decision",
+      "next_action",
+      "policy_warnings"
+    ]
+  }
+}
