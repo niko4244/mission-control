@@ -27,6 +27,7 @@
     "govern:release": "node scripts/release-governor.cjs",
     "govern:bot-system": "node scripts/mission-control-bot-system.cjs",
     "journal:exec": "node scripts/execution-journal.cjs",
+    "steward:systems": "node scripts/systems-steward.cjs",
     "govern:arbiter": "node scripts/chief-arbiter.cjs",
     "status:mc": "node scripts/workflow-governor.cjs",
     "dev": "pnpm run verify:node && next dev --hostname 127.0.0.1 --port 3000",
