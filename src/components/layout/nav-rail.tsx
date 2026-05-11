@@ -49,6 +49,7 @@ const navGroups: NavGroup[] = [
       { id: 'office', label: 'Office', icon: <OfficeIcon />, priority: false },
       { id: 'monitor', label: 'Monitor', icon: <MonitorIcon />, priority: false },
       { id: 'mc-status', label: 'MC Status', icon: <McStatusIcon />, priority: false },
+      { id: 'portfolio', label: 'Portfolios', icon: <PortfolioIcon />, priority: true },
     ],
   },
   {
@@ -1531,6 +1532,15 @@ function McStatusIcon() {
     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="8" cy="8" r="6" />
       <path d="M8 5v3l2 2" />
+    </svg>
+  )
+}
+
+function PortfolioIcon() {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="1,11 5,7 9,9 15,3" />
+      <polyline points="11,3 15,3 15,7" />
     </svg>
   )
 }
