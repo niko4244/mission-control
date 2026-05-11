@@ -152,7 +152,7 @@ function loadBotSystem(rootDir, options = {}) {
 function detectPlannedBotsWithoutScripts(registry, rootDir) {
   const bots = Array.isArray(registry && registry.bots) ? registry.bots : [];
   return bots
-    .filter((bot) => bot.status !== 'implemented' && bot.implementation_type === 'script')
+    .filter((bot) => bot.status !== 'implemented' && bot.status !== 'deferred' && bot.implementation_type === 'script')
     .map((bot) => ({
       id: bot.id,
       name: bot.name,

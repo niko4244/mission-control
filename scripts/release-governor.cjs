@@ -274,7 +274,7 @@ function runReleaseGovernor(options = {}) {
   const registryBots = Array.isArray(loadedFiles.registry && loadedFiles.registry.bots)
     ? loadedFiles.registry.bots
     : [];
-  const plannedBots = registryBots.filter((bot) => bot.status !== 'implemented').map((bot) => bot.id);
+  const plannedBots = registryBots.filter((bot) => bot.status !== 'implemented' && bot.status !== 'deferred').map((bot) => bot.id);
   if (plannedBots.length > 0) {
     warnings.push(`Planned bots remain unimplemented: ${plannedBots.join(', ')}`);
     nextActions.push('Keep release governance human-supervised while planned bot layers remain unimplemented');

@@ -238,7 +238,7 @@ function detectImplementedBots(rootDir, registry, options = {}) {
     .sort();
   const missingPlannedBots = registryIndex.bots
     .filter((bot) => bot.implementation_type === 'script')
-    .filter((bot) => bot.status !== 'implemented')
+    .filter((bot) => bot.status !== 'implemented' && bot.status !== 'deferred')
     .filter((bot) => !implementedIds.includes(bot.id))
     .map((bot) => bot.id)
     .sort();
@@ -741,7 +741,7 @@ function buildStatusMode(rootDir, options = {}) {
     loaded: true,
     bot_count: shared.registry.bots.length,
     implemented: shared.detection.implemented,
-    planned: shared.registry.bots.filter((bot) => bot.status !== 'implemented').map((bot) => bot.id),
+    planned: shared.registry.bots.filter((bot) => bot.status !== 'implemented' && bot.status !== 'deferred').map((bot) => bot.id),
     missing_planned: shared.detection.missing_planned_bots,
     non_script_implementations: shared.detection.non_script_implementations,
     authority_levels: shared.authorityLevels,
@@ -794,7 +794,7 @@ function buildRegistryMode(rootDir, options = {}) {
     loaded: true,
     bot_count: shared.registry.bots.length,
     implemented: shared.detection.implemented,
-    planned: shared.registry.bots.filter((bot) => bot.status !== 'implemented').map((bot) => bot.id),
+    planned: shared.registry.bots.filter((bot) => bot.status !== 'implemented' && bot.status !== 'deferred').map((bot) => bot.id),
     authority_levels: shared.authorityLevels,
     summary_rows: rows,
   };
@@ -831,7 +831,7 @@ function buildPolicyMode(rootDir, options = {}) {
     loaded: true,
     bot_count: shared.registry.bots.length,
     implemented: shared.detection.implemented,
-    planned: shared.registry.bots.filter((bot) => bot.status !== 'implemented').map((bot) => bot.id),
+    planned: shared.registry.bots.filter((bot) => bot.status !== 'implemented' && bot.status !== 'deferred').map((bot) => bot.id),
     authority_levels: shared.authorityLevels,
   };
   result.policy = {
@@ -874,7 +874,7 @@ function buildRouteMode(rootDir, taskText, options = {}) {
     loaded: true,
     bot_count: shared.registry.bots.length,
     implemented: shared.detection.implemented,
-    planned: shared.registry.bots.filter((bot) => bot.status !== 'implemented').map((bot) => bot.id),
+    planned: shared.registry.bots.filter((bot) => bot.status !== 'implemented' && bot.status !== 'deferred').map((bot) => bot.id),
     authority_levels: shared.authorityLevels,
   };
   result.policy = {
@@ -909,7 +909,7 @@ function buildAuthorityMode(rootDir, botId, options = {}) {
     loaded: true,
     bot_count: shared.registry.bots.length,
     implemented: shared.detection.implemented,
-    planned: shared.registry.bots.filter((bot) => bot.status !== 'implemented').map((bot) => bot.id),
+    planned: shared.registry.bots.filter((bot) => bot.status !== 'implemented' && bot.status !== 'deferred').map((bot) => bot.id),
     authority_levels: shared.authorityLevels,
   };
   result.policy = {
