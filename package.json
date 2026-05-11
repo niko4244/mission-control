@@ -24,6 +24,8 @@
     "plan:boundaries": "node scripts/boundary-patch-planner.cjs",
     "orchestrate:pr": "node scripts/pr-lifecycle-orchestrator.cjs",
     "govern:workflow": "node scripts/workflow-governor.cjs",
+    "govern:release": "node scripts/release-governor.cjs",
+    "govern:bot-system": "node scripts/mission-control-bot-system.cjs",
     "status:mc": "node scripts/workflow-governor.cjs",
     "dev": "pnpm run verify:node && next dev --hostname 127.0.0.1 --port 3000",
     "build": "pnpm run verify:node && next build",

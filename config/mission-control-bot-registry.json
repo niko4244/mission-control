@@ -1,0 +1,911 @@
+{
+  "version": 1,
+  "label": "Mission Control Bot Operating System v1",
+  "observe_only": true,
+  "bots": [
+    {
+      "id": "human-owner",
+      "name": "Human Owner",
+      "status": "implemented",
+      "implementation_type": "human",
+      "category": "authority",
+      "authority_level": 0,
+      "reports_to": null,
+      "supervises": [
+        "chief-arbiter",
+        "policy-engine"
+      ],
+      "may_mutate": true,
+      "may_stage": true,
+      "may_commit": true,
+      "may_push": true,
+      "may_create_pr": true,
+      "may_merge": true,
+      "may_authorize": true,
+      "may_reject": true,
+      "may_request_corrections": true,
+      "human_approval_required_for": [],
+      "allowed_domains": [
+        "all"
+      ],
+      "blocked_domains": [],
+      "notes": "Final authority. May override any bot decision and owns mission direction, protected-domain approval, and merge approval."
+    },
+    {
+      "id": "chief-arbiter",
+      "name": "Chief Arbiter",
+      "status": "planned",
+      "implementation_type": "script",
+      "category": "authority",
+      "authority_level": 1,
+      "reports_to": "human-owner",
+      "supervises": [
+        "task-router",
+        "security-arbiter",
+        "release-governor",
+        "architecture-governor",
+        "appliance-knowledge-governor",
+        "local-model-provider-governor",
+        "ui-dashboard-governor",
+        "documentation-governor"
+      ],
+      "may_mutate": false,
+      "may_stage": false,
+      "may_commit": false,
+      "may_push": false,
+      "may_create_pr": false,
+      "may_merge": false,
+      "may_authorize": true,
+      "may_reject": true,
+      "may_request_corrections": true,
+      "human_approval_required_for": [
+        "override explicit human block",
+        "push",
+        "create_pr",
+        "merge",
+        "protected-domain policy exceptions"
+      ],
+      "allowed_domains": [
+        "all"
+      ],
+      "blocked_domains": [
+        "human-owner decisions"
+      ],
+      "notes": "Highest bot authority. Approves or rejects plans, blocks release, and authorizes lower-layer work under policy but never overrides an explicit human stop."
+    },
+    {
+      "id": "policy-engine",
+      "name": "Policy Engine / Constitution",
+      "status": "implemented",
+      "implementation_type": "config",
+      "category": "constitution",
+      "authority_level": 2,
+      "reports_to": "human-owner",
+      "supervises": [],
+      "may_mutate": false,
+      "may_stage": false,
+      "may_commit": false,
+      "may_push": false,
+      "may_create_pr": false,
+      "may_merge": false,
+      "may_authorize": false,
+      "may_reject": false,
+      "may_request_corrections": false,
+      "human_approval_required_for": [
+        "policy changes",
+        "authority boundary changes",
+        "protected-domain exceptions"
+      ],
+      "allowed_domains": [
+        "governance",
+        "policy",
+        "routing",
+        "release-gates"
+      ],
+      "blocked_domains": [
+        "direct code mutation",
+        "direct git mutation"
+      ],
+      "notes": "Source of truth for risk classes, hard blocks, approvals, protected domains, validation gates, and future automation boundaries."
+    },
+    {
+      "id": "task-router",
+      "name": "Task Router / Work Queue",
+      "status": "implemented",
+      "implementation_type": "script",
+      "implementation_script": "scripts/mission-control-bot-system.cjs",
+      "category": "router",
+      "authority_level": 7,
+      "reports_to": "chief-arbiter",
+      "supervises": [],
+      "may_mutate": false,
+      "may_stage": false,
+      "may_commit": false,
+      "may_push": false,
+      "may_create_pr": false,
+      "may_merge": false,
+      "may_authorize": false,
+      "may_reject": false,
+      "may_request_corrections": true,
+      "human_approval_required_for": [
+        "routing policy changes"
+      ],
+      "allowed_domains": [
+        "routing",
+        "classification",
+        "governance"
+      ],
+      "blocked_domains": [
+        "direct execution",
+        "git mutation"
+      ],
+      "notes": "Observe-only router that classifies incoming work and sends it to the correct governor, verifier, and executor stack."
+    },
+    {
+      "id": "security-hardening-runner",
+      "name": "Security Hardening Runner",
+      "status": "implemented",
+      "implementation_type": "script",
+      "implementation_script": "scripts/security-hardening-runner.cjs",
+      "category": "verifier",
+      "authority_level": 4,
+      "reports_to": "security-governor",
+      "supervises": [],
+      "may_mutate": false,
+      "may_stage": false,
+      "may_commit": false,
+      "may_push": false,
+      "may_create_pr": false,
+      "may_merge": false,
+      "may_authorize": false,
+      "may_reject": false,
+      "may_request_corrections": true,
+      "human_approval_required_for": [
+        "expanding verification scope beyond approved domain"
+      ],
+      "allowed_domains": [
+        "security",
+        "workspace-fallback",
+        "route-hardening"
+      ],
+      "blocked_domains": [
+        "git mutation",
+        "remote mutation"
+      ],
+      "notes": "Existing security-specific observer and verifier for workspace fallback and related route hardening issues."
+    },
+    {
+      "id": "security-governor",
+      "name": "Security Governor",
+      "status": "implemented",
+      "implementation_type": "script",
+      "implementation_script": "scripts/security-governor.cjs",
+      "category": "governor",
+      "authority_level": 3,
+      "reports_to": "security-arbiter",
+      "supervises": [
+        "security-hardening-runner",
+        "security-executor"
+      ],
+      "may_mutate": false,
+      "may_stage": false,
+      "may_commit": false,
+      "may_push": false,
+      "may_create_pr": false,
+      "may_merge": false,
+      "may_authorize": true,
+      "may_reject": true,
+      "may_request_corrections": true,
+      "human_approval_required_for": [
+        "auth helper changes",
+        "workspace enforcement changes",
+        "schema changes",
+        "push",
+        "create_pr",
+        "merge"
+      ],
+      "allowed_domains": [
+        "security",
+        "auth",
+        "workspace-enforcement",
+        "routes",
+        "approvals"
+      ],
+      "blocked_domains": [
+        "direct code mutation",
+        "remote mutation"
+      ],
+      "notes": "Approves scope, enforces security policy, and blocks unsafe work before execution."
+    },
+    {
+      "id": "security-arbiter",
+      "name": "Security Arbiter",
+      "status": "implemented",
+      "implementation_type": "script",
+      "implementation_script": "scripts/security-arbiter.cjs",
+      "category": "domain-arbiter",
+      "authority_level": 3,
+      "reports_to": "chief-arbiter",
+      "supervises": [
+        "security-governor"
+      ],
+      "may_mutate": false,
+      "may_stage": false,
+      "may_commit": false,
+      "may_push": false,
+      "may_create_pr": false,
+      "may_merge": false,
+      "may_authorize": true,
+      "may_reject": true,
+      "may_request_corrections": true,
+      "human_approval_required_for": [
+        "push",
+        "create_pr",
+        "merge",
+        "protected-domain exceptions"
+      ],
+      "allowed_domains": [
+        "security",
+        "auth",
+        "workspace-enforcement",
+        "release-gates"
+      ],
+      "blocked_domains": [
+        "human-owner decisions",
+        "direct code mutation"
+      ],
+      "notes": "Domain-specific critical reviewer for security plans and patches beneath the chief arbiter."
+    },
+    {
+      "id": "security-executor",
+      "name": "Security Executor",
+      "status": "implemented",
+      "implementation_type": "script",
+      "implementation_script": "scripts/security-executor.cjs",
+      "category": "executor",
+      "authority_level": 5,
+      "reports_to": "security-governor",
+      "supervises": [],
+      "may_mutate": true,
+      "may_stage": true,
+      "may_commit": true,
+      "may_push": false,
+      "may_create_pr": false,
+      "may_merge": false,
+      "may_authorize": false,
+      "may_reject": false,
+      "may_request_corrections": false,
+      "human_approval_required_for": [
+        "push",
+        "create_pr",
+        "merge",
+        "protected-domain exceptions"
+      ],
+      "allowed_domains": [
+        "security",
+        "local-execution",
+        "route-hardening"
+      ],
+      "blocked_domains": [
+        "remote mutation",
+        "merge"
+      ],
+      "notes": "Performs bounded local mutation, stage, and commit actions only when runner, governor, arbiter, and policy all agree."
+    },
+    {
+      "id": "release-governor",
+      "name": "Release Governor",
+      "status": "implemented",
+      "implementation_type": "script",
+      "implementation_script": "scripts/release-governor.cjs",
+      "category": "governor",
+      "authority_level": 3,
+      "reports_to": "chief-arbiter",
+      "supervises": [
+        "release-manager",
+        "merge-steward",
+        "ci-sentinel"
+      ],
+      "may_mutate": false,
+      "may_stage": false,
+      "may_commit": false,
+      "may_push": false,
+      "may_create_pr": false,
+      "may_merge": false,
+      "may_authorize": true,
+      "may_reject": true,
+      "may_request_corrections": true,
+      "human_approval_required_for": [
+        "push",
+        "create_pr",
+        "merge",
+        "release policy changes"
+      ],
+      "allowed_domains": [
+        "release",
+        "delivery",
+        "pr",
+        "merge"
+      ],
+      "blocked_domains": [
+        "direct code mutation",
+        "remote mutation",
+        "deploy",
+        "merge"
+      ],
+      "notes": "Observe-only release readiness governor that inspects local PR lifecycle safety, release-sensitive drift, and validation readiness without executing release actions."
+    },
+    {
+      "id": "architecture-governor",
+      "name": "Architecture Governor",
+      "status": "planned",
+      "implementation_type": "script",
+      "category": "governor",
+      "authority_level": 3,
+      "reports_to": "chief-arbiter",
+      "supervises": [
+        "architecture-critic",
+        "route-family-migrator"
+      ],
+      "may_mutate": false,
+      "may_stage": false,
+      "may_commit": false,
+      "may_push": false,
+      "may_create_pr": false,
+      "may_merge": false,
+      "may_authorize": true,
+      "may_reject": true,
+      "may_request_corrections": true,
+      "human_approval_required_for": [
+        "protected boundary exceptions",
+        "schema changes",
+        "push",
+        "create_pr",
+        "merge"
+      ],
+      "allowed_domains": [
+        "architecture",
+        "boundaries",
+        "refactors"
+      ],
+      "blocked_domains": [
+        "direct code mutation"
+      ],
+      "notes": "Owns architecture drift review, import boundaries, and high-level refactor guardrails."
+    },
+    {
+      "id": "appliance-knowledge-governor",
+      "name": "Appliance Knowledge Governor",
+      "status": "planned",
+      "implementation_type": "script",
+      "category": "governor",
+      "authority_level": 3,
+      "reports_to": "chief-arbiter",
+      "supervises": [],
+      "may_mutate": false,
+      "may_stage": false,
+      "may_commit": false,
+      "may_push": false,
+      "may_create_pr": false,
+      "may_merge": false,
+      "may_authorize": true,
+      "may_reject": true,
+      "may_request_corrections": true,
+      "human_approval_required_for": [
+        "modeling assumptions with production impact",
+        "push",
+        "create_pr",
+        "merge"
+      ],
+      "allowed_domains": [
+        "appliance-knowledge",
+        "diagnostics",
+        "device-behavior"
+      ],
+      "blocked_domains": [
+        "direct code mutation"
+      ],
+      "notes": "Future governor for appliance knowledge, diagnostics, and operational domain accuracy."
+    },
+    {
+      "id": "local-model-provider-governor",
+      "name": "Local Model / Provider Governor",
+      "status": "planned",
+      "implementation_type": "script",
+      "category": "governor",
+      "authority_level": 3,
+      "reports_to": "chief-arbiter",
+      "supervises": [],
+      "may_mutate": false,
+      "may_stage": false,
+      "may_commit": false,
+      "may_push": false,
+      "may_create_pr": false,
+      "may_merge": false,
+      "may_authorize": true,
+      "may_reject": true,
+      "may_request_corrections": true,
+      "human_approval_required_for": [
+        "provider credential changes",
+        "gateway changes",
+        "push",
+        "create_pr",
+        "merge"
+      ],
+      "allowed_domains": [
+        "models",
+        "providers",
+        "gateways",
+        "local-capabilities"
+      ],
+      "blocked_domains": [
+        "direct code mutation"
+      ],
+      "notes": "Future governor for model/provider integrations, local execution capability checks, and provider policy."
+    },
+    {
+      "id": "ui-dashboard-governor",
+      "name": "UI / Dashboard Governor",
+      "status": "planned",
+      "implementation_type": "script",
+      "category": "governor",
+      "authority_level": 3,
+      "reports_to": "chief-arbiter",
+      "supervises": [
+        "operator-dashboard-bot"
+      ],
+      "may_mutate": false,
+      "may_stage": false,
+      "may_commit": false,
+      "may_push": false,
+      "may_create_pr": false,
+      "may_merge": false,
+      "may_authorize": true,
+      "may_reject": true,
+      "may_request_corrections": true,
+      "human_approval_required_for": [
+        "protected data exposure",
+        "push",
+        "create_pr",
+        "merge"
+      ],
+      "allowed_domains": [
+        "ui",
+        "dashboard",
+        "visibility"
+      ],
+      "blocked_domains": [
+        "direct code mutation"
+      ],
+      "notes": "Future governor for dashboard visibility, operator UX, and safe exposure of bot state."
+    },
+    {
+      "id": "documentation-governor",
+      "name": "Documentation Governor",
+      "status": "planned",
+      "implementation_type": "script",
+      "category": "governor",
+      "authority_level": 3,
+      "reports_to": "chief-arbiter",
+      "supervises": [
+        "documentation-executor"
+      ],
+      "may_mutate": false,
+      "may_stage": false,
+      "may_commit": false,
+      "may_push": false,
+      "may_create_pr": false,
+      "may_merge": false,
+      "may_authorize": true,
+      "may_reject": true,
+      "may_request_corrections": true,
+      "human_approval_required_for": [
+        "policy docs that change authority boundaries",
+        "push",
+        "create_pr",
+        "merge"
+      ],
+      "allowed_domains": [
+        "docs",
+        "playbooks",
+        "operator-guides"
+      ],
+      "blocked_domains": [
+        "direct runtime mutation"
+      ],
+      "notes": "Future governor for documentation changes and operator guidance updates."
+    },
+    {
+      "id": "release-manager",
+      "name": "Release Manager",
+      "status": "planned",
+      "implementation_type": "script",
+      "category": "executor",
+      "authority_level": 5,
+      "reports_to": "release-governor",
+      "supervises": [],
+      "may_mutate": true,
+      "may_stage": true,
+      "may_commit": true,
+      "may_push": false,
+      "may_create_pr": false,
+      "may_merge": false,
+      "may_authorize": false,
+      "may_reject": false,
+      "may_request_corrections": false,
+      "human_approval_required_for": [
+        "push",
+        "create_pr",
+        "merge",
+        "release cutovers"
+      ],
+      "allowed_domains": [
+        "release",
+        "pr",
+        "delivery"
+      ],
+      "blocked_domains": [
+        "merge",
+        "human-owner decisions"
+      ],
+      "notes": "Future executor for bounded release actions after release-governor and chief-arbiter authorization."
+    },
+    {
+      "id": "merge-steward",
+      "name": "Merge Steward",
+      "status": "planned",
+      "implementation_type": "script",
+      "category": "observer",
+      "authority_level": 7,
+      "reports_to": "release-governor",
+      "supervises": [],
+      "may_mutate": false,
+      "may_stage": false,
+      "may_commit": false,
+      "may_push": false,
+      "may_create_pr": false,
+      "may_merge": false,
+      "may_authorize": false,
+      "may_reject": false,
+      "may_request_corrections": true,
+      "human_approval_required_for": [
+        "merge"
+      ],
+      "allowed_domains": [
+        "merge",
+        "release-gates"
+      ],
+      "blocked_domains": [
+        "direct merge",
+        "remote mutation"
+      ],
+      "notes": "Future supporting bot for merge checklists, release evidence collection, and human-facing merge readiness."
+    },
+    {
+      "id": "ci-sentinel",
+      "name": "CI Sentinel",
+      "status": "planned",
+      "implementation_type": "script",
+      "category": "verifier",
+      "authority_level": 4,
+      "reports_to": "release-governor",
+      "supervises": [],
+      "may_mutate": false,
+      "may_stage": false,
+      "may_commit": false,
+      "may_push": false,
+      "may_create_pr": false,
+      "may_merge": false,
+      "may_authorize": false,
+      "may_reject": false,
+      "may_request_corrections": true,
+      "human_approval_required_for": [
+        "ignoring failed CI"
+      ],
+      "allowed_domains": [
+        "ci",
+        "release",
+        "validation"
+      ],
+      "blocked_domains": [
+        "direct git mutation"
+      ],
+      "notes": "Future verifier for CI health, flaky test detection, and release readiness checks."
+    },
+    {
+      "id": "architecture-critic",
+      "name": "Architecture Critic",
+      "status": "planned",
+      "implementation_type": "script",
+      "category": "verifier",
+      "authority_level": 4,
+      "reports_to": "architecture-governor",
+      "supervises": [],
+      "may_mutate": false,
+      "may_stage": false,
+      "may_commit": false,
+      "may_push": false,
+      "may_create_pr": false,
+      "may_merge": false,
+      "may_authorize": false,
+      "may_reject": false,
+      "may_request_corrections": true,
+      "human_approval_required_for": [
+        "boundary exceptions"
+      ],
+      "allowed_domains": [
+        "architecture",
+        "boundaries"
+      ],
+      "blocked_domains": [
+        "direct code mutation"
+      ],
+      "notes": "Future verifier for architecture drift, boundary discipline, and refactor risk."
+    },
+    {
+      "id": "test-coverage-auditor",
+      "name": "Test Coverage Auditor",
+      "status": "planned",
+      "implementation_type": "script",
+      "category": "verifier",
+      "authority_level": 4,
+      "reports_to": "chief-arbiter",
+      "supervises": [],
+      "may_mutate": false,
+      "may_stage": false,
+      "may_commit": false,
+      "may_push": false,
+      "may_create_pr": false,
+      "may_merge": false,
+      "may_authorize": false,
+      "may_reject": false,
+      "may_request_corrections": true,
+      "human_approval_required_for": [
+        "waiving coverage gaps"
+      ],
+      "allowed_domains": [
+        "tests",
+        "validation",
+        "quality"
+      ],
+      "blocked_domains": [
+        "direct code mutation"
+      ],
+      "notes": "Future verifier for focused coverage expectations, regression gaps, and risky untested changes."
+    },
+    {
+      "id": "route-family-migrator",
+      "name": "Route Family Migrator",
+      "status": "planned",
+      "implementation_type": "script",
+      "category": "implementer",
+      "authority_level": 6,
+      "reports_to": "architecture-governor",
+      "supervises": [],
+      "may_mutate": true,
+      "may_stage": false,
+      "may_commit": false,
+      "may_push": false,
+      "may_create_pr": false,
+      "may_merge": false,
+      "may_authorize": false,
+      "may_reject": false,
+      "may_request_corrections": true,
+      "human_approval_required_for": [
+        "broad route family changes",
+        "stage",
+        "commit",
+        "push",
+        "create_pr",
+        "merge"
+      ],
+      "allowed_domains": [
+        "architecture",
+        "routes",
+        "migrations"
+      ],
+      "blocked_domains": [
+        "remote mutation"
+      ],
+      "notes": "Future implementer for constrained, governor-approved route family migrations."
+    },
+    {
+      "id": "correction-loop-manager",
+      "name": "Correction Loop Manager",
+      "status": "planned",
+      "implementation_type": "script",
+      "category": "executor",
+      "authority_level": 5,
+      "reports_to": "chief-arbiter",
+      "supervises": [],
+      "may_mutate": true,
+      "may_stage": true,
+      "may_commit": true,
+      "may_push": false,
+      "may_create_pr": false,
+      "may_merge": false,
+      "may_authorize": false,
+      "may_reject": false,
+      "may_request_corrections": false,
+      "human_approval_required_for": [
+        "protected-domain corrections",
+        "push",
+        "create_pr",
+        "merge"
+      ],
+      "allowed_domains": [
+        "corrections",
+        "rework",
+        "follow-up"
+      ],
+      "blocked_domains": [
+        "remote mutation"
+      ],
+      "notes": "Future executor for bounded correction loops after a governor or arbiter requests changes."
+    },
+    {
+      "id": "lessons-curator",
+      "name": "Lessons Curator",
+      "status": "planned",
+      "implementation_type": "script",
+      "category": "observer",
+      "authority_level": 7,
+      "reports_to": "chief-arbiter",
+      "supervises": [],
+      "may_mutate": false,
+      "may_stage": false,
+      "may_commit": false,
+      "may_push": false,
+      "may_create_pr": false,
+      "may_merge": false,
+      "may_authorize": false,
+      "may_reject": false,
+      "may_request_corrections": true,
+      "human_approval_required_for": [
+        "publishing memory to production systems"
+      ],
+      "allowed_domains": [
+        "memory",
+        "lessons",
+        "postmortems"
+      ],
+      "blocked_domains": [
+        "direct runtime mutation"
+      ],
+      "notes": "Future bot for capturing lessons, corrections, and durable operating patterns."
+    },
+    {
+      "id": "prompt-compiler",
+      "name": "Prompt Compiler",
+      "status": "planned",
+      "implementation_type": "script",
+      "category": "implementer",
+      "authority_level": 6,
+      "reports_to": "chief-arbiter",
+      "supervises": [],
+      "may_mutate": true,
+      "may_stage": false,
+      "may_commit": false,
+      "may_push": false,
+      "may_create_pr": false,
+      "may_merge": false,
+      "may_authorize": false,
+      "may_reject": false,
+      "may_request_corrections": true,
+      "human_approval_required_for": [
+        "prompt changes affecting protected domains",
+        "stage",
+        "commit",
+        "push",
+        "create_pr",
+        "merge"
+      ],
+      "allowed_domains": [
+        "prompts",
+        "governance",
+        "automation"
+      ],
+      "blocked_domains": [
+        "remote mutation"
+      ],
+      "notes": "Future implementer for producing bounded prompts from policy-approved plans."
+    },
+    {
+      "id": "operator-dashboard-bot",
+      "name": "Operator Dashboard Bot",
+      "status": "planned",
+      "implementation_type": "script",
+      "category": "observer",
+      "authority_level": 7,
+      "reports_to": "ui-dashboard-governor",
+      "supervises": [],
+      "may_mutate": false,
+      "may_stage": false,
+      "may_commit": false,
+      "may_push": false,
+      "may_create_pr": false,
+      "may_merge": false,
+      "may_authorize": false,
+      "may_reject": false,
+      "may_request_corrections": true,
+      "human_approval_required_for": [
+        "exposing protected-domain data"
+      ],
+      "allowed_domains": [
+        "dashboard",
+        "visibility",
+        "operator-reporting"
+      ],
+      "blocked_domains": [
+        "direct execution",
+        "merge"
+      ],
+      "notes": "Future visibility bot for surfacing queue state, risk, approvals, and next actions to operators."
+    },
+    {
+      "id": "bot-registry-inspector",
+      "name": "Bot Registry Inspector",
+      "status": "planned",
+      "implementation_type": "script",
+      "category": "observer",
+      "authority_level": 7,
+      "reports_to": "chief-arbiter",
+      "supervises": [],
+      "may_mutate": false,
+      "may_stage": false,
+      "may_commit": false,
+      "may_push": false,
+      "may_create_pr": false,
+      "may_merge": false,
+      "may_authorize": false,
+      "may_reject": false,
+      "may_request_corrections": true,
+      "human_approval_required_for": [
+        "registry policy edits"
+      ],
+      "allowed_domains": [
+        "registry",
+        "governance",
+        "visibility"
+      ],
+      "blocked_domains": [
+        "direct execution"
+      ],
+      "notes": "Future observer that audits whether every implemented bot is registered and policy-compliant."
+    },
+    {
+      "id": "documentation-executor",
+      "name": "Documentation Executor",
+      "status": "planned",
+      "implementation_type": "script",
+      "category": "executor",
+      "authority_level": 5,
+      "reports_to": "documentation-governor",
+      "supervises": [],
+      "may_mutate": true,
+      "may_stage": true,
+      "may_commit": true,
+      "may_push": false,
+      "may_create_pr": false,
+      "may_merge": false,
+      "may_authorize": false,
+      "may_reject": false,
+      "may_request_corrections": false,
+      "human_approval_required_for": [
+        "policy doc changes affecting authority",
+        "push",
+        "create_pr",
+        "merge"
+      ],
+      "allowed_domains": [
+        "docs",
+        "playbooks",
+        "operator-guides"
+      ],
+      "blocked_domains": [
+        "remote mutation"
+      ],
+      "notes": "Future bounded executor for docs-only and operator guidance changes."
+    }
+  ]
+}
