@@ -112,7 +112,7 @@ export function GovernorStatusWidget({ data }: { data: DashboardData }) {
         Confidence <span className="font-mono-tight text-foreground/70">{Math.round((gov.confidence ?? 0) * 100)}%</span>
       </span>
 
-      <span className="text-muted-foreground/50 font-mono-tight">{tsStr}</span>
+      <span className="text-muted-foreground/50 font-mono-tight" suppressHydrationWarning>{tsStr}</span>
 
       <button
         type="button"

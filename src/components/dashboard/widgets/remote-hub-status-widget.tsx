@@ -78,7 +78,7 @@ export function RemoteHubStatusWidget({ data }: { data: DashboardData }) {
           status={toneFor(hubStatus.runtime.status)}
         />
         <p className="text-2xs text-muted-foreground">
-          Last started {new Date(hubStatus.runtime.last_started_at).toLocaleString()}.
+          <span suppressHydrationWarning>Last started {new Date(hubStatus.runtime.last_started_at).toLocaleString()}.</span>
         </p>
       </div>
     </div>

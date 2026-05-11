@@ -237,7 +237,7 @@ export function LogRow({ log }: { log: LogLike }) {
           <div className="flex items-center gap-1.5 mt-0.5">
             <span className="text-2xs text-muted-foreground font-mono-tight">{log.source}</span>
             <span className="text-2xs text-muted-foreground/40">·</span>
-            <span className="text-2xs text-muted-foreground">{new Date(log.timestamp).toLocaleTimeString()}</span>
+            <span className="text-2xs text-muted-foreground" suppressHydrationWarning>{new Date(log.timestamp).toLocaleTimeString()}</span>
           </div>
         </div>
       </div>

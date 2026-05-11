@@ -62,7 +62,7 @@ export function ActivityTimelineWidget({ data }: { data: DashboardData }) {
                 <div key={log.id} className="px-4 py-2.5 hover:bg-secondary/30 transition-smooth group">
                   <div className="flex items-start gap-3">
                     {/* Time column */}
-                    <span className="text-2xs text-muted-foreground/60 font-mono-tight w-14 shrink-0 pt-0.5">
+                    <span className="text-2xs text-muted-foreground/60 font-mono-tight w-14 shrink-0 pt-0.5" suppressHydrationWarning>
                       {timeAgo(log.timestamp)}
                     </span>
 

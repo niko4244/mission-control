@@ -16,9 +16,9 @@ function Sparkline({ data, color = 'currentColor' }: { data: number[]; color?: s
   const areaPoints = `0,${h} ${points} ${w},${h}`
 
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} className="w-14 h-5 inline-block" preserveAspectRatio="none">
-      <polygon points={areaPoints} fill={color} opacity="0.1" />
-      <polyline points={points} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    <svg viewBox={`0 0 ${w} ${h}`} className="w-14 h-5 inline-block" preserveAspectRatio="none" suppressHydrationWarning>
+      <polygon points={areaPoints} fill={color} opacity="0.1" suppressHydrationWarning />
+      <polyline points={points} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" suppressHydrationWarning />
     </svg>
   )
 }
