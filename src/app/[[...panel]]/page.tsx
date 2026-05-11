@@ -31,6 +31,7 @@ import { OfficePanel } from '@/components/panels/office-panel'
 import { GitHubSyncPanel } from '@/components/panels/github-sync-panel'
 import { SkillsPanel } from '@/components/panels/skills-panel'
 import { PassiveIncomeBotPanel } from '@/components/panels/passive-income-bot-panel'
+import { AgentPortfolioPanel } from '@/components/panels/agent-portfolio-panel'
 import { LocalAgentsDocPanel } from '@/components/panels/local-agents-doc-panel'
 import { ChannelsPanel } from '@/components/panels/channels-panel'
 import { DebugPanel } from '@/components/panels/debug-panel'
@@ -599,6 +600,9 @@ function ContentRouter({ tab }: { tab: string }) {
       return <SkillsPanel />
     case 'passive-income':
       return <PassiveIncomeBotPanel />
+    case 'portfolio':
+    case 'agent-portfolio':
+      return <AgentPortfolioPanel />
     case 'channels':
       if (isLocal) return <LocalModeUnavailable panel={tab} />
       return <ChannelsPanel />
